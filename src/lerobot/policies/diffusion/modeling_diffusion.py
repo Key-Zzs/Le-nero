@@ -20,9 +20,7 @@ TODO(alexander-soare):
   - Remove reliance on diffusers for DDPMScheduler and LR scheduler.
 """
 
-import logging
 import math
-import os
 from collections import deque
 from collections.abc import Callable
 
@@ -44,33 +42,6 @@ from lerobot.policies.utils import (
     populate_queues,
 )
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
-
-
-def _env_flag_enabled(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _parse_debug_action_dims(action_dim: int) -> list[int]:
-    raw_dims = os.getenv("LEROBOT_DIFFUSION_DEBUG_ACTION_DIMS")
-    if raw_dims is None or raw_dims.strip() == "":
-        # The dual-arm datasets in this project place left/right gripper commands last.
-        return list(range(max(0, action_dim - 2), action_dim))
-
-    dims: list[int] = []
-    for raw_dim in raw_dims.split(","):
-        raw_dim = raw_dim.strip()
-        if not raw_dim:
-            continue
-        dim = int(raw_dim)
-        if dim < 0:
-            dim += action_dim
-        if dim < 0 or dim >= action_dim:
-            raise ValueError(
-                f"LEROBOT_DIFFUSION_DEBUG_ACTION_DIMS contains invalid dim {raw_dim!r} "
-                f"for action_dim={action_dim}."
-            )
-        dims.append(dim)
-    return dims
 
 
 class DiffusionPolicy(PreTrainedPolicy):
@@ -320,7 +291,6 @@ class DiffusionModel(nn.Module):
 
         # run sampling
         actions = self.conditional_sample(batch_size, global_cond=global_cond, noise=noise)
-        self._maybe_log_action_horizon(actions, n_obs_steps)
 
         # Extract `n_action_steps` steps worth of actions (from the current observation).
         start = n_obs_steps - 1
@@ -328,42 +298,6 @@ class DiffusionModel(nn.Module):
         actions = actions[:, start:end]
 
         return actions
-
-    def _maybe_log_action_horizon(self, actions: Tensor, n_obs_steps: int) -> None:
-        if not _env_flag_enabled("LEROBOT_DIFFUSION_DEBUG_ACTION_HORIZON"):
-            return
-
-        action_dim = actions.shape[-1]
-        debug_dims = _parse_debug_action_dims(action_dim)
-        delta_indices = self.config.action_delta_indices
-        start = n_obs_steps - 1
-        end = start + self.config.n_action_steps
-
-        fps_raw = os.getenv("LEROBOT_DIFFUSION_DEBUG_FPS")
-        fps = float(fps_raw) if fps_raw else None
-        lines = [
-            "[DiffusionPolicy] predicted normalized action horizon for batch[0]; "
-            f"debug_action_dims={debug_dims}; executed_slice=[{start}:{end}); "
-            f"n_obs_steps={n_obs_steps}; n_action_steps={self.config.n_action_steps}"
-        ]
-
-        horizon = actions.detach()[0].to("cpu")
-        for horizon_idx in range(horizon.shape[0]):
-            delta_idx = delta_indices[horizon_idx] if horizon_idx < len(delta_indices) else None
-            if fps is None or delta_idx is None:
-                delta_time = "n/a"
-            else:
-                delta_time = f"{delta_idx / fps:+.4f}s"
-            values = ", ".join(
-                f"dim{dim}={float(horizon[horizon_idx, dim]):+.5f}" for dim in debug_dims
-            )
-            marker = "EXEC" if start <= horizon_idx < end else "skip"
-            lines.append(
-                f"  horizon_idx={horizon_idx:02d} delta_index={delta_idx} "
-                f"delta_time={delta_time} {marker} {values}"
-            )
-
-        logging.info("\n".join(lines))
 
     def compute_loss(self, batch: dict[str, Tensor]) -> Tensor:
         """
