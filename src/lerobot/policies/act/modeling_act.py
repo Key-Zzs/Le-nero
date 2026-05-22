@@ -30,12 +30,92 @@ import torch
 import torch.nn.functional as F  # noqa: N812
 import torchvision
 from torch import Tensor, nn
+from torchvision.models import resnet as torchvision_resnet
 from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.ops.misc import FrozenBatchNorm2d
 
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
+
+
+_BASIC_BLOCK_RESNET_LAYERS = {
+    "resnet18": [2, 2, 2, 2],
+    "resnet34": [3, 4, 6, 3],
+}
+
+
+class _DilatedBasicBlock(nn.Module):
+    """Torchvision BasicBlock variant that supports dilation."""
+
+    expansion: int = 1
+
+    def __init__(
+        self,
+        inplanes: int,
+        planes: int,
+        stride: int = 1,
+        downsample: nn.Module | None = None,
+        groups: int = 1,
+        base_width: int = 64,
+        dilation: int = 1,
+        norm_layer: Callable[..., nn.Module] | None = None,
+    ) -> None:
+        super().__init__()
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        if groups != 1 or base_width != 64:
+            raise ValueError("BasicBlock only supports groups=1 and base_width=64")
+
+        self.conv1 = torchvision_resnet.conv3x3(inplanes, planes, stride, dilation=dilation)
+        self.bn1 = norm_layer(planes)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = torchvision_resnet.conv3x3(planes, planes, dilation=dilation)
+        self.bn2 = norm_layer(planes)
+        self.downsample = downsample
+        self.stride = stride
+
+    def forward(self, x: Tensor) -> Tensor:
+        identity = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        out += identity
+        out = self.relu(out)
+
+        return out
+
+
+def _make_act_backbone(config: ACTConfig) -> torchvision_resnet.ResNet:
+    replace_stride_with_dilation = [False, False, config.replace_final_stride_with_dilation]
+
+    if config.replace_final_stride_with_dilation and config.vision_backbone in _BASIC_BLOCK_RESNET_LAYERS:
+        weights = torchvision.models.get_model_weights(config.vision_backbone).verify(
+            config.pretrained_backbone_weights
+        )
+        backbone_model = torchvision_resnet.ResNet(
+            _DilatedBasicBlock,
+            _BASIC_BLOCK_RESNET_LAYERS[config.vision_backbone],
+            replace_stride_with_dilation=replace_stride_with_dilation,
+            norm_layer=FrozenBatchNorm2d,
+        )
+        if weights is not None:
+            backbone_model.load_state_dict(weights.get_state_dict(progress=True, check_hash=True))
+        return backbone_model
+
+    return getattr(torchvision.models, config.vision_backbone)(
+        replace_stride_with_dilation=replace_stride_with_dilation,
+        weights=config.pretrained_backbone_weights,
+        norm_layer=FrozenBatchNorm2d,
+    )
 
 
 class ACTPolicy(PreTrainedPolicy):
@@ -320,11 +400,7 @@ class ACT(nn.Module):
 
         # Backbone for image feature extraction.
         if self.config.image_features:
-            backbone_model = getattr(torchvision.models, config.vision_backbone)(
-                replace_stride_with_dilation=[False, False, config.replace_final_stride_with_dilation],
-                weights=config.pretrained_backbone_weights,
-                norm_layer=FrozenBatchNorm2d,
-            )
+            backbone_model = _make_act_backbone(config)
             # Note: The assumption here is that we are using a ResNet model (and hence layer4 is the final
             # feature map).
             # Note: The forward method of this returns a dict: {"feature_map": output}.
