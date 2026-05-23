@@ -33,7 +33,7 @@ from lerobot.envs.factory import make_env, make_env_config
 from lerobot.envs.utils import preprocess_observation
 from lerobot.optim.factory import make_optimizer_and_scheduler
 from lerobot.policies.act.configuration_act import ACTConfig
-from lerobot.policies.act.modeling_act import ACTTemporalEnsembler
+from lerobot.policies.act.modeling_act import ACTPolicy, ACTTemporalEnsembler
 from lerobot.policies.factory import (
     get_policy_class,
     make_policy,
@@ -254,6 +254,23 @@ def test_policy_defaults(dummy_dataset_metadata, policy_name: str):
         key: ft for key, ft in features.items() if key not in policy_cfg.output_features
     }
     policy_cls(policy_cfg)
+
+
+def test_act_resnet18_supports_final_stride_dilation():
+    config = ACTConfig(
+        input_features={
+            f"{OBS_IMAGES}.cam": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 84, 84)),
+            OBS_STATE: PolicyFeature(type=FeatureType.STATE, shape=(6,)),
+        },
+        output_features={ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(6,))},
+        pretrained_backbone_weights=None,
+        replace_final_stride_with_dilation=True,
+    )
+
+    policy = ACTPolicy(config)
+    feature_map = policy.model.backbone(torch.zeros(1, 3, 84, 84))["feature_map"]
+
+    assert feature_map.shape[-2:] == (6, 6)
 
 
 @pytest.mark.parametrize("policy_name", available_policies)
