@@ -1,190 +1,302 @@
 # Le-nero
 
-## TODOs
+This repository is based on LeRobot and adds dual-arm robot teleoperation, data collection, policy training, and a round-based DAgger loop. This README only covers the repository structure, configuration entry points, and runtime call flow needed for daily use.
 
-- [ ] validate the round-based DAgger pipeline on the next collected dataset
-
-## DAgger
-
-当前推荐的 DAgger 主线是轮次式闭环：
+The examples below assume the repository path is:
 
 ```bash
-robot-dagger
+/home/keyz/Documents/projects/Robot/wbcd/Le-nero
 ```
 
-`robot-dagger` 的 round controller 现在是 policy-agnostic skeleton；
-当前只实现 ACT backend。Diffusion Policy / BC / VLA 需要新增对应 backend 后再接入。
+Replace it with your local path as needed.
 
-单独导出 raw run_mix 日志时使用：
+## Repository Setup and Environment
+
+For a first-time clone, fetch submodules together with the main repository:
 
 ```bash
-python -m scripts.core.run_dagger_export --config dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/dagger_rounds_cfg.yaml
+git clone --recurse-submodules <Le-nero repository URL> Le-nero
+cd Le-nero
 ```
 
-## Config
+If the repository has already been cloned but submodule directories are empty or incomplete, run this from the repository root:
 
 ```bash
-git clone --recurse-submodules https://github.com/Key-Zzs/Le-nero.git
+git submodule sync --recursive
+git submodule update --init --recursive
 ```
+
+To update the main repository and submodules during daily development:
 
 ```bash
-# branch checkout: main/test_chunk-wise/worked_base_db44758
-git checkout test_chunk-wise
-git submodule foreach 'git checkout main' # submodule only have branch 'main' when Repo is on brach 'test_chunk-wise' 
-
-# branch push
-git submodule foreach 'git add . ;git commit -m "<commit_message>" || true'
-git submodule foreach 'git push origin <branch_name>'
-git push origin <branch_name>
+cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero
+git pull --ff-only
+git submodule sync --recursive
+git submodule update --init --recursive
+git submodule update --remote --merge --recursive
 ```
 
-如果忘记添加 `--recursive` 选项，需要手动克隆子模块：
+To switch the main repository branch:
 
 ```bash
-cd agilex_ws/agilex_teleop
-
-# 1. 初始化 submodule 配置
-git submodule init
-
-# 2. 拉取所有 submodule 的实际代码（递归，如果子模块还有子模块）
-git submodule update --recursive
+git fetch origin
+git switch <branch_name>
+git submodule update --init --recursive
 ```
+
+To switch or update the dual-arm teleoperation submodule:
+
+```bash
+cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
+git fetch origin
+git switch main
+git pull --ff-only
+```
+
+Create the Python environment and install both the root repository and the dual-arm teleoperation package:
 
 ```bash
 conda create -n dual_arm_teleop python=3.10 -y
 conda activate dual_arm_teleop
-```
+python -m pip install --upgrade pip
 
-### agilex_teleop
-
-```bash
-cd dual_arm_data_collection/agilex_teleop/
-# git submodule init
-# git submodule update --recursive
-pip install -e .
-pip install -r requirements.txt
-
-```
-
-```bash
-sudo apt update && sudo apt install ethtool can-utils
-bash pyAgxArm/scripts/ubuntu/find_all_can_port.sh
-```
-
-假设上面记录的 `USB port` 数值分别为 `3-1.4:1.0` 和 `3-1.1:1.0`，则将 [agilex_ws/agilex_teleop/pyAgxArm/scripts/ubuntu/can_muti_activate.sh](./dual_arm_data_collection/agilex_teleop/pyAgxArm/scripts/ubuntu/can_muti_activate.sh) 中的参数修改为：
-
-```bash
-USB_PORTS["3-1.4:1.0"]="can_left:1000000"
-USB_PORTS["3-1.1:1.0"]="can_right:1000000"
-```
-
-含义：`3-1.4:1.0` 端口的 CAN 设备重命名为 `can_left`，波特率 `1000000`，并激活。
-
-激活多个 CAN 模块
-
-执行：
-
-```bash
-bash pyAgxArm/scripts/ubuntu/can_muti_activate.sh
-```
-
-运行 nero 测试脚本（最好运行，否则后续机械臂可能会处于未使能状态）
-
-**注意**：[reset.py](./nero/tests/reset.py) 和 [test_pos_flw_ik.py](./nero/tests/test_pos_flw_ik.py) 均为单臂测试脚本，请运行单臂后修改文件中的 can 设备名，如 `can_left` 或 `can_right`，再运行下一个。
-**注意**：
-请保证 `bash pyAgxArm/scripts/ubuntu/find_all_can_port.sh` 输出有 `can_left` 和 `can_right` 两个 can 设备！！
-
-```bash
-# nero 关节重置脚本
-python nero/tests/reset.py
-```
-
-```bash
-# 启动 Server 服务
-python nero/teleop/interface/nero_interface_server.py --ip 0.0.0.0 --port 4242
-
-# 开放端口 4242（若 Server 端 PC 默认开放端口，无需此步）
-udo iptables -I INPUT -p tcp --dport 4242 -j ACCEPT # iptables 方式
-```
-
-### lerobot_dual_arm_teleop
-
-```bash
-cd dual_arm_data_collection/lerobot_dual_arm_teleop/
+cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero
 pip install -e .
 
-cd teleoperators/oculus_teleoperator/oculus
+cd dual_arm_data_collection/lerobot_dual_arm_teleop
+pip install -e .
+```
+
+Oculus Reader is not managed by the current `.gitmodules`, so it must be cloned separately into the required location:
+
+```bash
+cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop/teleoperators/oculus_teleoperator/oculus
 git clone https://github.com/rail-berkeley/oculus_reader.git
 cd oculus_reader
 pip install -e .
 ```
 
-1. 安装 ADB（Android 调试桥）：Oculus Quest 与计算机之间通信必需的工具
-
-   ```bash
-   # 在 Ubuntu 上
-   sudo apt install android-tools-adb
-
-   # 验证安装
-   adb version
-   ```
-
-2. 在 Oculus Quest 上启用开发者模式
-
-   1. 在 [Meta for Developers](https://developer.oculus.com/manage/organizations/create/) 创建或加入开发者组织
-   2. 在手机上打开 Meta Quest 应用
-   3. 进入 **设置** → 选择您的设备 → **更多设置** → **开发者模式**
-   4. 启用 **开发者模式** 开关
-
-3. 连接 Oculus Quest 到计算机
-
-   方式 1：USB 连接（推荐用于初始设置，或对实时性要求高的场景）
-
-   1. 使用 USB-C 线缆将 Oculus Quest 连接到计算机
-   2. 佩戴头显并在提示时允许 USB 调试
-   3. 勾选 `始终允许来自此计算机`
-   4. 验证连接：
-   
-      ```bash
-      adb devices
-      # 预期输出：
-      # List of devices attached
-      # <device_id>    device
-      adb shell ip route
-      # 查找 "src" 后面的 IP 地址，例如 192.168.110.62
-      ```
-
-   方式 2：无线连接（操作更便捷）
-
-   1. 首先通过 USB 线缆连接 Oculus Quest 到计算机执行方案 1
-   2. 确保 Oculus Quest 和计算机连接到同一网络
-   3. 验证连接：
-   
-      ```bash
-      adb connect <获取到的IP地址>:5555
-      adb shell ip route
-      # 查找 "src" 后面的 IP 地址，例如 192.168.110.62
-      ```
-
-   4. 在 `record_cfg.yaml` 中配置 IP：
-   
-      ```yaml
-      teleop:
-         oculus_config:
-            ip: "192.168.110.62"  # 您的 Oculus Quest IP 地址
-      ```
-
-启动遥操作 Client 端服务
-
-**注意**：
-1. 启动前请 `adb devices` 检查 Oculus Quest 是否连接成功
-2. 每次修改项目中的 python 文件后，需在项目根目录 `agilex_ws/dual_arm_teleop`  下执行 `pip install -e .` 更新依赖
+If the directory already exists, update it and reinstall:
 
 ```bash
-# 重置机械臂
-robot-reset
-# 开始遥操作及数据采集
-robot-record
-# 右箭头：停止采集数据
-# enter：继续遥操作
+cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop/teleoperators/oculus_teleoperator/oculus/oculus_reader
+git pull --ff-only
+pip install -e .
 ```
+
+Oculus connectivity also requires ADB:
+
+```bash
+sudo apt install android-tools-adb
+adb devices
+```
+
+On the first USB connection, allow USB debugging in the headset. For wireless connection, first use `adb shell ip route` to find the headset IP, then run `adb connect <Oculus_IP>:5555`.
+
+## Core Modules and Runtime Flow
+
+The runtime flow can be understood as:
+
+```text
+scripts/config/*.yaml
+        |
+        v
+scripts/core/*.py command entry points
+        |
+        +--> robots create the real robot interface
+        +--> teleoperators create Oculus teleoperation input
+        +--> src/lerobot/policies create policy models
+        |
+        v
+LeRobot dataset / train / replay / visualize
+```
+
+### Policy Layer
+
+Policy code is located in:
+
+```text
+src/lerobot/policies
+```
+
+This directory keeps LeRobot policy abstractions and implementations such as `act`, `diffusion`, `smolvla`, and `pi0`. The dual-arm teleoperation scripts mainly use `lerobot.policies.factory.make_policy` and `make_pre_post_processors` to create policy objects and their pre/post-processors.
+
+The most commonly used policy config files in the dual-arm workflow are:
+
+- `scripts/policy_config/act_train_config.yaml`: ACT training config.
+- `scripts/policy_config/act_reason_config.yaml`: ACT inference/deployment config.
+- `scripts/policy_config/diffusion_train_config.yaml`: Diffusion Policy training config.
+- `scripts/policy_config/diffusion_reason_config.yaml`: Diffusion Policy inference/deployment config.
+
+`scripts/core/policy_config_utils.py` resolves policy config paths from `record_cfg.yaml`, `train_cfg.yaml`, or `dagger_rounds_cfg.yaml`. Relative paths are resolved first against the `lerobot_dual_arm_teleop` project root, and absolute paths are also supported.
+
+### Robot Communication Interface Layer
+
+Robot interfaces are located in:
+
+```text
+dual_arm_data_collection/lerobot_dual_arm_teleop/robots
+```
+
+`robots/__init__.py` is the robot registry. The currently registered robot types include:
+
+- `franka`
+- `dobot_dual_arm`
+- `nero_dual_arm`
+- `franka_dual_arm`
+
+Scripts do not instantiate a concrete robot class directly. Instead, they use the configured `robot_type` to call:
+
+```python
+create_robot_config(robot_type, **robot_cfg)
+create_robot(robot_type, robot_config)
+```
+
+Each concrete robot class implements the robot interface expected by LeRobot, such as `connect()`, `reset()`, `send_action()`, camera initialization, observation fields, and action fields. For example, `dual_agilex_nero/nero_dual_arm.py` connects to the dual-arm zerorpc service through `NeroDualArmClient`, then organizes dual-arm end-effector poses, joint states, gripper commands, and RealSense cameras into a LeRobot-compatible data structure.
+
+Hardware-specific parameters should usually live in config files instead of runtime scripts:
+
+```text
+dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/DAS_config
+```
+
+For example, `nero_cofig.yaml` defines the Nero robot IP, port, gripper parameters, Oculus mapping, and camera serial numbers. `run_record.py`, `run_replay.py`, and `reset_robot.py` automatically load the corresponding DAS config based on `record.robot_type`. You can also explicitly set `das_config_path` in `record_cfg.yaml`.
+
+### Tool Scripts, Data Collection, and Policy Configs
+
+Main scripts are located in:
+
+```text
+dual_arm_data_collection/lerobot_dual_arm_teleop/scripts
+```
+
+Common directories:
+
+- `scripts/core`: command entry implementations for record, replay, visualize, reset, train, and DAgger.
+- `scripts/config`: main workflow configs, including `record_cfg.yaml`, `train_cfg.yaml`, and `dagger_rounds_cfg.yaml`.
+- `scripts/policy_config`: policy hyperparameter configs, split into train and reason configs.
+- `scripts/DAS_config`: hardware and teleoperation detail configs.
+- `scripts/tools`: dataset checks, RealSense device checks, dataset patching, renaming, and related utilities.
+
+Core config files:
+
+- `record_cfg.yaml`: main config shared by data collection, policy inference, mixed control, replay, and visualization.
+- `train_cfg.yaml`: policy training config, including dataset paths, output directory, GPU settings, batch size, training steps, and wandb.
+- `dagger_rounds_cfg.yaml`: round-based DAgger controller config that connects collection, export, and next-round training.
+- `*_train_config.yaml`: model structure and training-related hyperparameters used during policy training.
+- `*_reason_config.yaml`: model structure, device, and checkpoint parameters used during inference or deployment.
+
+The three `robot-record` modes are controlled by `record.run_mode`:
+
+- `run_record`: pure teleoperation data collection.
+- `run_policy`: load a policy checkpoint and let the policy control the robot.
+- `run_mix`: policy execution with operator takeover, used for DAgger data collection.
+
+## Core Module Usage
+
+After installing `dual_arm_data_collection/lerobot_dual_arm_teleop/setup.py`, the following console commands are registered. Install with:
+
+```bash
+cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
+pip install -e .
+```
+
+Command entry points:
+
+| Command | Purpose | Default config |
+| --- | --- | --- |
+| `robot-record` | Teleoperation collection, policy execution, or run_mix mixed collection | `scripts/config/record_cfg.yaml` |
+| `robot-replay` | Replay a collected episode | `scripts/config/record_cfg.yaml` `replay` section |
+| `robot-visualize` | Visualize a dataset episode with Rerun | `scripts/config/record_cfg.yaml` `visualize` section |
+| `robot-reset` | Connect to the configured robot and return it home | `scripts/config/record_cfg.yaml` |
+| `robot-train` | Train ACT or Diffusion Policy | `scripts/config/train_cfg.yaml` |
+| `robot-dagger` | Run round-based DAgger: collect, export, then train the next-round policy | `scripts/config/dagger_rounds_cfg.yaml` |
+| `robot-dagger-export` | Export DAgger training data from raw run_mix logs | `scripts/config/dagger_rounds_cfg.yaml` `dagger_export` section |
+| `tools-check-dataset` | Inspect local LeRobot dataset information | Command arguments |
+| `tools-check-dagger-dataset` | Inspect an exported DAgger dataset | Command arguments |
+| `tools-check-rs` | Show RealSense device serial numbers | None |
+| `robot-help` | Print the command summary | None |
+
+All core commands support an explicit config file. It is recommended to pass the path during debugging:
+
+```bash
+robot-record --config scripts/config/record_cfg.yaml
+robot-replay --config scripts/config/record_cfg.yaml
+robot-visualize --config scripts/config/record_cfg.yaml
+robot-reset --config scripts/config/record_cfg.yaml
+robot-train --config scripts/config/train_cfg.yaml
+robot-dagger --config scripts/config/dagger_rounds_cfg.yaml
+robot-dagger-export --config scripts/config/dagger_rounds_cfg.yaml
+```
+
+Before data collection, usually edit `scripts/config/record_cfg.yaml`:
+
+- `record.repo_id`: dataset name. Recommended format: `<robot_task<num>_step<num>/<description>`, for example `nero_task3_step1/2mL_empty_right`.
+- `record.robot_type`: choose a robot type such as `nero_dual_arm` or `franka_dual_arm`.
+- `record.run_mode`: choose `run_record`, `run_policy`, or `run_mix`.
+- `record.policy.type`, `config_path`, `pretrained_path`: required only for `run_policy` or `run_mix`.
+- `record.task`: task description, number of episodes, resume behavior, and whether to record success labels.
+- `record.time`: max episode duration, reset duration, and metadata save period.
+- `replay`, `visualize`: default dataset and episode used by replay and visualization.
+
+Hardware parameters are usually edited in `scripts/DAS_config/*.yaml`:
+
+- `teleop.oculus_config.ip`: Oculus Quest IP.
+- `teleop.oculus_config.*_pose_scaler` and `*_channel_signs`: mapping from left/right controllers to robot actions.
+- `robot.robot_ip`, `robot.robot_port`: robot service address.
+- `robot.use_gripper` and gripper parameters: enable grippers, close/open thresholds, max opening width, and force.
+- `cameras.*_serial`, `width`, `height`: RealSense serial numbers and resolution.
+
+Before training, usually edit `scripts/config/train_cfg.yaml`:
+
+- `train.dataset.repo_id` and `train.dataset.root`: training dataset.
+- `train.policy.type` and `train.policy.config_path`: policy type and training config.
+- `train.output_dir`, `job_name`: model and log output location.
+- `train.training`: visible GPUs, memory cap, TF32, and other training device settings.
+- `train.steps`, `batch_size`, `num_workers`, `save_freq`: training scale.
+- `train.wandb`: wandb project and mode.
+
+Before DAgger, usually edit `scripts/config/dagger_rounds_cfg.yaml`:
+
+- `dagger_rounds.seed_repo_id` or `seed_dataset_path`: seed dataset used by round 0.
+- `dagger_rounds.initial_pretrained_path`: optional initial checkpoint, if one already exists.
+- `dagger_rounds.policy`: policy type used in rounds, plus train/reason config paths.
+- `dagger_rounds.episodes_per_round`, `num_rounds`, `round_schedule`: collection count per round, number of rounds, and training step schedule.
+- `dagger_rounds.output_root`: DAgger round output directory.
+- `dagger_rounds.record_cfg_path`, `train_cfg_path`: base configs dynamically modified and called by the controller.
+- `dagger_rounds.policy_backend.export`: rules for exporting run_mix logs into training data.
+
+Common workflow example:
+
+```bash
+cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
+
+# 1. Show camera serial numbers and fill them into scripts/DAS_config/*.yaml
+tools-check-rs
+
+# 2. Check that policy configs resolve correctly. Recommended before run_policy/run_mix
+robot-record --config scripts/config/record_cfg.yaml --dry-run-policy-config
+
+# 3. Connect to the robot and return it home
+robot-reset --config scripts/config/record_cfg.yaml
+
+# 4. Collect teleoperation data
+robot-record --config scripts/config/record_cfg.yaml
+
+# 5. Visualize or replay data
+robot-visualize --config scripts/config/record_cfg.yaml
+robot-replay --config scripts/config/record_cfg.yaml
+
+# 6. Train a policy
+robot-train --config scripts/config/train_cfg.yaml
+
+# 7. Run the round-based DAgger loop
+robot-dagger --config scripts/config/dagger_rounds_cfg.yaml
+```
+
+Common key controls during collection:
+
+- Right arrow: stop the current episode and save it.
+- Left arrow: discard the current episode.
+- Enter: continue to the next teleoperation segment or next episode.
+- Ctrl+C: interrupt and clean up the incomplete dataset.
