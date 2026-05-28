@@ -2,14 +2,6 @@
 
 This repository is based on LeRobot and adds dual-arm robot teleoperation, data collection, policy training, and a round-based DAgger loop. This README only covers the repository structure, configuration entry points, and runtime call flow needed for daily use.
 
-The examples below assume the repository path is:
-
-```bash
-/home/keyz/Documents/projects/Robot/wbcd/Le-nero
-```
-
-Replace it with your local path as needed.
-
 ## Repository Setup and Environment
 
 For a first-time clone, fetch submodules together with the main repository:
@@ -29,7 +21,7 @@ git submodule update --init --recursive
 To update the main repository and submodules during daily development:
 
 ```bash
-cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero
+cd Le-nero
 git pull --ff-only
 git submodule sync --recursive
 git submodule update --init --recursive
@@ -47,7 +39,7 @@ git submodule update --init --recursive
 To switch or update the dual-arm teleoperation submodule:
 
 ```bash
-cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
+cd Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
 git fetch origin
 git switch main
 git pull --ff-only
@@ -60,7 +52,7 @@ conda create -n dual_arm_teleop python=3.10 -y
 conda activate dual_arm_teleop
 python -m pip install --upgrade pip
 
-cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero
+cd Le-nero
 pip install -e .
 
 cd dual_arm_data_collection/lerobot_dual_arm_teleop
@@ -70,7 +62,7 @@ pip install -e .
 Oculus Reader is not managed by the current `.gitmodules`, so it must be cloned separately into the required location:
 
 ```bash
-cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop/teleoperators/oculus_teleoperator/oculus
+cd Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop/teleoperators/oculus_teleoperator/oculus
 git clone https://github.com/rail-berkeley/oculus_reader.git
 cd oculus_reader
 pip install -e .
@@ -79,7 +71,7 @@ pip install -e .
 If the directory already exists, update it and reinstall:
 
 ```bash
-cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop/teleoperators/oculus_teleoperator/oculus/oculus_reader
+cd Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop/teleoperators/oculus_teleoperator/oculus/oculus_reader
 git pull --ff-only
 pip install -e .
 ```
@@ -197,7 +189,7 @@ The three `robot-record` modes are controlled by `record.run_mode`:
 After installing `dual_arm_data_collection/lerobot_dual_arm_teleop/setup.py`, the following console commands are registered. Install with:
 
 ```bash
-cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
+cd Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
 pip install -e .
 ```
 
@@ -266,10 +258,33 @@ Before DAgger, usually edit `scripts/config/dagger_rounds_cfg.yaml`:
 - `dagger_rounds.record_cfg_path`, `train_cfg_path`: base configs dynamically modified and called by the controller.
 - `dagger_rounds.policy_backend.export`: rules for exporting run_mix logs into training data.
 
+## Quest Controller Buttons
+
+| Control | Function |
+| --- | --- |
+| Left grip `LG` | Hold to enable left-arm end-effector motion. In `run_mix`, this starts or continues expert override for the left arm. |
+| Right grip `RG` | Hold to enable right-arm end-effector motion. In `run_mix`, this starts or continues expert override for the right arm. |
+| Left trigger `LTr` | Control the left gripper. Pressing closes the gripper; releasing opens it. |
+| Right trigger `RTr` | Control the right gripper. Pressing closes the gripper; releasing opens it. |
+| `Y` button | In `run_mix`, release the left gripper channel back to policy control. |
+| `B` button | In `run_mix`, release the right gripper channel back to policy control. |
+| `A` button | Request robot reset, if supported by the active teleoperator/robot implementation. |
+| Controller pose | Controls the corresponding end-effector delta pose while the corresponding grip is held. |
+
+If `mirror_teleop` is enabled, the left/right controller assignment is swapped and pose deltas are mirrored before being sent to the robot.
+
+## DAgger/run_mix Controls
+
+- Policy is the default controller. Human input overrides only the channels being actively controlled.
+- Holding `LG` or `RG` makes the corresponding arm an expert override. The first override frame is marked as `takeover_start`; continued override frames are marked as `recovery`.
+- `LTr` and `RTr` control grippers independently from arm motion. Gripper takeover uses soft takeover: the trigger command must match the current held gripper value before manual gripper control becomes active, which avoids sudden jumps.
+- Press `Y` for the left gripper or `B` for the right gripper to hand that gripper back to the policy. The trigger must be released before that gripper can be manually reacquired.
+- Use the left arrow to discard failed, incomplete, low-quality, or not-trainable episodes before saving. This is required when `full_episode.success_policy` is `recorded_is_success`.
+
 Common workflow example:
 
 ```bash
-cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
+cd Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
 
 # 1. Show camera serial numbers and fill them into scripts/DAS_config/*.yaml
 tools-check-rs
@@ -298,5 +313,6 @@ Common key controls during collection:
 
 - Right arrow: stop the current episode and save it.
 - Left arrow: discard the current episode.
+- Esc: stop the recording session.
 - Enter: continue to the next teleoperation segment or next episode.
 - Ctrl+C: interrupt and clean up the incomplete dataset.

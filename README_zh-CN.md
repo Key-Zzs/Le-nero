@@ -4,10 +4,6 @@
 
 下文假设仓库目录为：
 
-```bash
-/home/keyz/Documents/projects/Robot/wbcd/Le-nero
-```
-
 实际使用时可以替换为自己的本地路径。
 
 ## 仓库获取与环境配置
@@ -29,7 +25,7 @@ git submodule update --init --recursive
 日常更新主仓库和子模块：
 
 ```bash
-cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero
+cd Le-nero
 git pull --ff-only
 git submodule sync --recursive
 git submodule update --init --recursive
@@ -47,7 +43,7 @@ git submodule update --init --recursive
 切换或更新双臂遥操作子模块：
 
 ```bash
-cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
+cd Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
 git fetch origin
 git switch main
 git pull --ff-only
@@ -60,7 +56,7 @@ conda create -n dual_arm_teleop python=3.10 -y
 conda activate dual_arm_teleop
 python -m pip install --upgrade pip
 
-cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero
+cd Le-nero
 pip install -e .
 
 cd dual_arm_data_collection/lerobot_dual_arm_teleop
@@ -70,7 +66,7 @@ pip install -e .
 Oculus Reader 不是通过当前 `.gitmodules` 管理的子模块，需要单独 clone 到指定目录：
 
 ```bash
-cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop/teleoperators/oculus_teleoperator/oculus
+cd Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop/teleoperators/oculus_teleoperator/oculus
 git clone https://github.com/rail-berkeley/oculus_reader.git
 cd oculus_reader
 pip install -e .
@@ -79,7 +75,7 @@ pip install -e .
 如果该目录已经存在，只需要更新并重新安装：
 
 ```bash
-cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop/teleoperators/oculus_teleoperator/oculus/oculus_reader
+cd Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop/teleoperators/oculus_teleoperator/oculus/oculus_reader
 git pull --ff-only
 pip install -e .
 ```
@@ -197,7 +193,7 @@ dual_arm_data_collection/lerobot_dual_arm_teleop/scripts
 `dual_arm_data_collection/lerobot_dual_arm_teleop/setup.py` 安装后会注册以下命令。安装命令为：
 
 ```bash
-cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
+cd Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
 pip install -e .
 ```
 
@@ -266,10 +262,33 @@ DAgger 前通常需要修改 `scripts/config/dagger_rounds_cfg.yaml`：
 - `dagger_rounds.record_cfg_path`、`train_cfg_path`：被控制器动态改写并调用的基础配置。
 - `dagger_rounds.policy_backend.export`：run_mix 日志导出为训练数据的规则。
 
+## Quest 控制器按键
+
+| 控制键 | 功能 |
+| --- | --- |
+| 左握持键 `LG` | 按住以启动左臂末端运动。在 `run_mix` 中会开始或持续左臂专家接管。 |
+| 右握持键 `RG` | 按住以启动右臂末端运动。在 `run_mix` 中会开始或持续右臂专家接管。 |
+| 左扳机 `LTr` | 控制左夹爪；按下关闭，松开打开。 |
+| 右扳机 `RTr` | 控制右夹爪；按下关闭，松开打开。 |
+| `Y` 按钮 | 在 `run_mix` 中将左夹爪通道交还给策略控制。 |
+| `B` 按钮 | 在 `run_mix` 中将右夹爪通道交还给策略控制。 |
+| `A` 按钮 | 在当前 teleoperator/robot 实现支持时请求机器人复位。 |
+| 控制器位姿 | 在对应握持键按住时，控制对应机械臂的末端增量位姿。 |
+
+如果启用了 `mirror_teleop`，左右控制器的对应关系会交换，并在发送给机器人前对位姿增量做镜像。
+
+## DAgger/run_mix 控制定义
+
+- 默认由策略控制机器人；人工输入只覆盖正在主动控制的通道。
+- 按住 `LG` 或 `RG` 会让对应手臂进入专家接管。接管的第一帧标记为 `takeover_start`，持续接管帧标记为 `recovery`。
+- `LTr` 和 `RTr` 独立控制夹爪，不要求同时接管手臂。夹爪接管使用 soft takeover：扳机命令需要先接近当前保持的夹爪值，手动夹爪控制才会生效，避免夹爪突然跳变。
+- 按 `Y` 可将左夹爪交还给策略，按 `B` 可将右夹爪交还给策略；交还后需要先松开对应扳机，才能再次手动接管该夹爪。
+- 使用左箭头丢弃失败、不完整、质量差或不适合作为训练示范的 episode。`full_episode.success_policy` 为 `recorded_is_success` 时，这一点尤其重要。
+
 常用流程示例：
 
 ```bash
-cd /home/keyz/Documents/projects/Robot/wbcd/Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
+cd Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
 
 # 1. 查看相机序列号，填入 scripts/DAS_config/*.yaml
 tools-check-rs
@@ -298,5 +317,6 @@ robot-dagger --config scripts/config/dagger_rounds_cfg.yaml
 
 - 右箭头：停止当前 episode 并保存。
 - 左箭头：丢弃当前 episode。
+- Esc：停止整个录制任务。
 - Enter：继续下一段遥操作或下一条 episode。
 - Ctrl+C：中断并清理未完成数据集。
