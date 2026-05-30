@@ -119,10 +119,10 @@ src/lerobot/policies
 
 当前双臂流程中最常用的是：
 
-- `scripts/policy_config/act_train_config.yaml`：ACT 训练配置。
-- `scripts/policy_config/act_reason_config.yaml`：ACT 推理/部署配置。
-- `scripts/policy_config/diffusion_train_config.yaml`：Diffusion Policy 训练配置。
-- `scripts/policy_config/diffusion_reason_config.yaml`：Diffusion Policy 推理/部署配置。
+- `scripts/config/policy_config/act_train_config.yaml`：ACT 训练配置。
+- `scripts/config/policy_config/act_reason_config.yaml`：ACT 推理/部署配置。
+- `scripts/config/policy_config/diffusion_train_config.yaml`：Diffusion Policy 训练配置。
+- `scripts/config/policy_config/diffusion_reason_config.yaml`：Diffusion Policy 推理/部署配置。
 
 `scripts/core/policy_config_utils.py` 负责解析 `record_cfg.yaml`、`train_cfg.yaml` 或 `dagger_rounds_cfg.yaml` 中的策略配置路径。相对路径会优先按 `lerobot_dual_arm_teleop` 项目根目录解析，也支持直接写绝对路径。
 
@@ -153,7 +153,7 @@ create_robot(robot_type, robot_config)
 硬件相关参数不建议直接写在运行脚本里，而是放在：
 
 ```text
-dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/DAS_config
+dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/DAS_config
 ```
 
 例如 `nero_cofig.yaml` 定义 Nero 的机器人 IP、端口、夹爪参数、Oculus 映射和相机序列号。`run_record.py`、`run_replay.py`、`reset_robot.py` 会根据 `record.robot_type` 自动加载对应 DAS 配置；也可以在 `record_cfg.yaml` 中通过 `das_config_path` 显式指定。
@@ -170,8 +170,8 @@ dual_arm_data_collection/lerobot_dual_arm_teleop/scripts
 
 - `scripts/core`：命令入口实现，包括采集、回放、可视化、重置、训练、DAgger。
 - `scripts/config`：主流程配置，包含 `record_cfg.yaml`、`train_cfg.yaml`、`dagger_rounds_cfg.yaml`。
-- `scripts/policy_config`：策略超参数配置，区分 train 和 reason 两类。
-- `scripts/DAS_config`：硬件和遥操作细节配置。
+- `scripts/config/policy_config`：策略超参数配置，区分 train 和 reason 两类。
+- `scripts/config/DAS_config`：硬件和遥操作细节配置。
 - `scripts/tools`：数据集检查、RealSense 设备检查、数据集修补和重命名等工具。
 
 核心配置文件：
@@ -235,7 +235,7 @@ robot-dagger-export --config scripts/config/dagger_rounds_cfg.yaml
 - `record.time`：episode 最大时长、reset 时长和 metadata 保存周期。
 - `replay`、`visualize`：回放和可视化默认使用的数据集和 episode。
 
-硬件参数通常在 `scripts/DAS_config/*.yaml` 中修改：
+硬件参数通常在 `scripts/config/DAS_config/*.yaml` 中修改：
 
 - `teleop.oculus_config.ip`：Oculus Quest IP。
 - `teleop.oculus_config.*_pose_scaler` 和 `*_channel_signs`：左右手柄到机器人动作的映射。
@@ -290,7 +290,7 @@ DAgger 前通常需要修改 `scripts/config/dagger_rounds_cfg.yaml`：
 ```bash
 cd Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
 
-# 1. 查看相机序列号，填入 scripts/DAS_config/*.yaml
+# 1. 查看相机序列号，填入 scripts/config/DAS_config/*.yaml
 tools-check-rs
 
 # 2. 检查策略配置能否正常解析，run_policy/run_mix 前推荐执行
