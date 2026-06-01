@@ -27,6 +27,22 @@ from lerobot.utils.constants import ACTION, DONE, OBS_PREFIX, REWARD, TRUNCATED
 
 from .core import EnvTransition, PolicyAction, RobotAction, RobotObservation, TransitionKey
 
+ANNOTATION_PREFIX = "annotation."
+
+
+def _prepare_annotation_value(key: str, value: Any) -> Any:
+    if not key.startswith(ANNOTATION_PREFIX) or not isinstance(value, torch.Tensor):
+        return value
+
+    if value.ndim >= 2 and value.shape[-1] == 1:
+        value = value.squeeze(-1)
+
+    if key.endswith("gripper_event"):
+        return value.to(dtype=torch.long)
+    if key.endswith("keyframe_weight"):
+        return value.to(dtype=torch.float32)
+    return value
+
 
 @singledispatch
 def to_tensor(
@@ -167,11 +183,14 @@ def _extract_complementary_data(batch: dict[str, Any]) -> dict[str, Any]:
         A dictionary with the extracted complementary data.
     """
     pad_keys = {k: v for k, v in batch.items() if "_is_pad" in k}
+    annotation_keys = {
+        k: _prepare_annotation_value(k, v) for k, v in batch.items() if k.startswith(ANNOTATION_PREFIX)
+    }
     task_key = {"task": batch["task"]} if "task" in batch else {}
     index_key = {"index": batch["index"]} if "index" in batch else {}
     task_index_key = {"task_index": batch["task_index"]} if "task_index" in batch else {}
 
-    return {**pad_keys, **task_key, **index_key, **task_index_key}
+    return {**pad_keys, **annotation_keys, **task_key, **index_key, **task_index_key}
 
 
 def create_transition(

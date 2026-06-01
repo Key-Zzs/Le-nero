@@ -327,7 +327,7 @@ robot-dagger --config scripts/config/dagger_rounds_cfg.yaml
 
 - [x] Phase 1A：验证 hysteresis 夹爪开合检测器
 - [x] Phase 1B：生成带 annotation 字段的新 dataset copy
-- [ ] Phase 2：让 annotation 字段通过 dataset 和 processor 进入 batch
+- [x] Phase 2：让 annotation 字段通过 dataset 和 processor 进入 batch
 - [ ] Phase 3：添加默认关闭的 ACT 加权 loss
 - [ ] Phase 4：添加默认关闭的 Diffusion Policy 加权去噪 loss
 - [ ] Phase 5：可选关键帧感知采样器
@@ -339,4 +339,4 @@ robot-dagger --config scripts/config/dagger_rounds_cfg.yaml
 
 - 在默认关闭的 loss 阶段落地前，ACT 和 Diffusion Policy 的默认训练行为必须保持不变。
 - annotation 导出不能修改原始 dataset；新增字段只应写入显式指定的新 dataset copy。
-- 进入训练前仍需要 Phase 2，让 dataset temporal query 和 processor 保留 annotation tensor。
+- Phase 2 只传播 annotation tensor；加权 loss 从 Phase 3 开始。

@@ -323,7 +323,7 @@ Common key controls during collection:
 
 - [x] Phase 1A: Validate hysteresis gripper transition detector
 - [x] Phase 1B: Export annotated dataset copy with annotation fields
-- [ ] Phase 2: Propagate annotation fields through dataset and processor
+- [x] Phase 2: Propagate annotation fields through dataset and processor
 - [ ] Phase 3: Add disabled-by-default ACT weighted loss
 - [ ] Phase 4: Add disabled-by-default Diffusion Policy weighted denoising loss
 - [ ] Phase 5: Optional keyframe-aware sampler
@@ -335,4 +335,4 @@ Common key controls during collection:
 
 - Training defaults for ACT and Diffusion Policy must stay unchanged until disabled-by-default loss phases land.
 - Annotation export must never mutate the source dataset; new fields belong only in an explicit output copy.
-- Phase 2 still needs dataset temporal query and processor propagation before training can consume annotation tensors.
+- Phase 2 only propagates annotation tensors; weighted losses start in Phase 3.
