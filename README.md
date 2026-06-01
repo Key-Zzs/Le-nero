@@ -326,7 +326,7 @@ Common key controls during collection:
 - [x] Phase 2: Propagate annotation fields through dataset and processor
 - [x] Phase 3: Add disabled-by-default ACT weighted loss
 - [x] Phase 4: Add disabled-by-default Diffusion Policy weighted denoising loss
-- [ ] Phase 5: Optional keyframe-aware sampler
+- [x] Phase 5: Optional keyframe-aware sampler
 - [ ] Phase 6: Metrics, debugging, and visualization
 - [ ] Phase 7: Tests and regression safety
 - [ ] Phase 8: Training and rollout validation
@@ -336,3 +336,4 @@ Common key controls during collection:
 - Training defaults for ACT and Diffusion Policy must stay unchanged until disabled-by-default loss phases land.
 - Annotation export must never mutate the source dataset; new fields belong only in an explicit output copy.
 - Phase 4 keeps Diffusion Policy weighted loss disabled by default; scheduler, noise sampling, and inference remain unchanged.
+- Phase 5 keeps keyframe-aware sampling disabled by default and preserves DP episode-aware sample eligibility when enabled.

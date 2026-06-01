@@ -27,7 +27,12 @@ from torch.optim import Optimizer
 from lerobot.configs import parser
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.datasets.factory import make_dataset
-from lerobot.datasets.sampler import EpisodeAwareSampler
+from lerobot.datasets.sampler import (
+    EpisodeAwareSampler,
+    build_keyframe_weighted_sampler,
+    format_keyframe_sampler_stats,
+    keyframe_sampler_enabled,
+)
 from lerobot.datasets.utils import cycle
 from lerobot.envs.factory import make_env
 from lerobot.envs.utils import close_envs
@@ -276,6 +281,22 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     else:
         shuffle = True
         sampler = None
+
+    if keyframe_sampler_enabled(cfg.keyframe_sampler):
+        if cfg.dataset.streaming:
+            raise ValueError("keyframe_sampler.enabled=true is not supported for streaming datasets.")
+        eligible_indices = sampler.indices if isinstance(sampler, EpisodeAwareSampler) else None
+        keyframe_sampler_result = build_keyframe_weighted_sampler(
+            dataset,
+            cfg.policy.action_delta_indices,
+            cfg.keyframe_sampler,
+            eligible_indices=eligible_indices,
+        )
+        if cfg.keyframe_sampler.log_sampler_stats and is_main_process:
+            logging.info(format_keyframe_sampler_stats(keyframe_sampler_result.stats))
+        if keyframe_sampler_result.sampler is not None:
+            sampler = keyframe_sampler_result.sampler
+            shuffle = False
 
     dataloader = torch.utils.data.DataLoader(
         dataset,

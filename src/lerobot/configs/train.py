@@ -33,6 +33,24 @@ TRAIN_CONFIG_NAME = "train_config.json"
 
 
 @dataclass
+class KeyframeSamplerConfig:
+    """Optional action-window keyframe-aware sampler. Disabled by default."""
+
+    enabled: bool = False
+    annotation_weight_column: str = "annotation.keyframe_weight"
+    annotation_event_column: str = "annotation.gripper_event"
+    positive_if_weight_gt: float = 1.0
+    positive_event_ids: list[int] = field(default_factory=lambda: [2, 5])
+    include_pre_post_events: bool = True
+    positive_sample_weight: float = 3.0
+    normal_sample_weight: float = 1.0
+    max_sample_weight: float = 4.0
+    require_annotation: bool = False
+    seed: int = 0
+    log_sampler_stats: bool = True
+
+
+@dataclass
 class TrainPipelineConfig(HubMixin):
     dataset: DatasetConfig
     env: envs.EnvConfig | None = None
@@ -52,6 +70,7 @@ class TrainPipelineConfig(HubMixin):
     # Number of workers for the dataloader.
     num_workers: int = 4
     batch_size: int = 8
+    keyframe_sampler: KeyframeSamplerConfig = field(default_factory=KeyframeSamplerConfig)
     steps: int = 100_000
     eval_freq: int = 20_000
     log_freq: int = 200
@@ -65,6 +84,8 @@ class TrainPipelineConfig(HubMixin):
     wandb: WandBConfig = field(default_factory=WandBConfig)
 
     def __post_init__(self):
+        if isinstance(self.keyframe_sampler, dict):
+            self.keyframe_sampler = KeyframeSamplerConfig(**self.keyframe_sampler)
         self.checkpoint_path = None
 
     def validate(self):
