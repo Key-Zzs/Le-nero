@@ -321,137 +321,18 @@ Common key controls during collection:
 
 ### Gripper Transition Keyframe Weighting TODO
 
-Scope for this TODO: design and implementation planning only. The current training default behavior for ACT and Diffusion Policy must stay unchanged until an explicit disabled-by-default implementation phase lands.
+- [x] Phase 1A: Validate hysteresis gripper transition detector
+- [x] Phase 1B: Export annotated dataset copy with annotation fields
+- [ ] Phase 2: Propagate annotation fields through dataset and processor
+- [ ] Phase 3: Add disabled-by-default ACT weighted loss
+- [ ] Phase 4: Add disabled-by-default Diffusion Policy weighted denoising loss
+- [ ] Phase 5: Optional keyframe-aware sampler
+- [ ] Phase 6: Metrics, debugging, and visualization
+- [ ] Phase 7: Tests and regression safety
+- [ ] Phase 8: Training and rollout validation
 
-Codebase inspection summary:
+#### Notes
 
-- Dataset entry and chunk construction: `src/lerobot/datasets/factory.py`, `src/lerobot/datasets/lerobot_dataset.py`, `src/lerobot/datasets/utils.py`.
-- Training dataloaders and logging: `src/lerobot/scripts/lerobot_train.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/core/run_train.py`, `src/lerobot/utils/logging_utils.py`, `src/lerobot/rl/wandb_utils.py`.
-- ACT loss and config: `src/lerobot/policies/act/modeling_act.py`, `src/lerobot/policies/act/configuration_act.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/policy_config/act_train_config.yaml`.
-- Diffusion Policy loss and config: `src/lerobot/policies/diffusion/modeling_diffusion.py`, `src/lerobot/policies/diffusion/configuration_diffusion.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/policy_config/diffusion_train_config.yaml`.
-- Policy feature inference and preprocessing: `src/lerobot/policies/factory.py`, `src/lerobot/processor/converters.py`, `src/lerobot/policies/act/processor_act.py`, `src/lerobot/policies/diffusion/processor_diffusion.py`.
-- Existing annotation/edit/sampling references: `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/debug/annotate_dataset_phase.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/tools/preprocess_dataset.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/tools/patch_lerobot_dataset_metadata.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/tools/merge_lerobot_tasks.py`, `src/lerobot/scripts/lerobot_edit_dataset.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/core/dagger_sampling.py`.
-- Tests to extend later: `tests/datasets/test_datasets.py`, `tests/datasets/test_sampler.py`, `tests/processor/test_act_processor.py`, `tests/processor/test_diffusion_processor.py`, `tests/policies/test_policies.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_dagger_sampling.py`.
-
-Current behavior to preserve:
-
-- ACT builds action chunks from `ACTConfig.action_delta_indices = range(chunk_size)`. `LeRobotDataset._get_query_indices()` clamps indices to episode boundaries and creates `action_is_pad` for padded chunk positions. `ACTPolicy.forward()` currently computes L1 action loss with `F.l1_loss(..., reduction="none")`, multiplies by `~batch["action_is_pad"].unsqueeze(-1)`, then calls `.mean()`. If VAE is enabled, KLD is added as `l1_loss + kl_weight * kld_loss`.
-- Diffusion Policy builds the action horizon from `DiffusionConfig.action_delta_indices = range(1 - n_obs_steps, 1 - n_obs_steps + horizon)`. `DiffusionModel.compute_loss()` uses `F.mse_loss(pred, target, reduction="none")` over `[B, horizon, action_dim]`, optionally masks with `action_is_pad` only when `do_mask_loss_for_padding` is true, then returns `loss.mean()`. The sampled diffusion noise timestep variable is `timesteps` with shape `[B]`; this is separate from action horizon step `H`.
-- New parquet columns can be loaded only if they are registered in `meta/info.json` features, because `LeRobotDataset.load_hf_dataset()` builds Hugging Face features from `self.features`. However, policy preprocessing currently drops arbitrary non-observation annotation keys: `src/lerobot/processor/converters.py` preserves observation keys, action, padding keys containing `_is_pad`, task/index metadata, reward/done/truncated, but not generic keys such as `annotation.keyframe_weight`.
-- Action dimension names live in `dataset.meta.features["action"]["names"]`; `PolicyFeature` only carries shape/type. Gripper dim inference should use dataset feature names when available, with explicit config indices as fallback. Current dual-arm action names include patterns such as `left_gripper_cmd`, `right_gripper_cmd`, `left_gripper_cmd_bin`, and `right_gripper_cmd_bin`.
-
-Future config sketch, README-only for now:
-
-```yaml
-loss_weighting:
-  enabled: false
-  keyframe_weight_column: "annotation.keyframe_weight"
-  gripper_event_column: "annotation.gripper_event"
-  use_timestep_weight: true
-  use_action_dim_weight: true
-  gripper_dim_indices: null
-  infer_gripper_dim_from_feature_names: true
-  gripper_dim_weight: 2.0
-  max_weight: 10.0
-  normalize_weighted_loss: true
-  apply_to_pose_dims: true
-  pose_keyframe_weight_scale: 1.0
-  apply_to_gripper_dims: true
-  gripper_keyframe_weight_scale: 1.0
-```
-
-Phase 0: Codebase inspection and design confirmation
-
-- Goal: Freeze the implementation surface before code changes: dataset propagation, ACT loss, DP loss, config shape, logging, sampler, and tests.
-- Files involved: `src/lerobot/datasets/factory.py`, `src/lerobot/datasets/lerobot_dataset.py`, `src/lerobot/datasets/utils.py`, `src/lerobot/processor/converters.py`, `src/lerobot/policies/factory.py`, `src/lerobot/scripts/lerobot_train.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/core/run_train.py`, ACT/DP files listed above.
-- TODO items: document whether annotation fields should be treated as queryable temporal features; decide whether `resolve_delta_timestamps()` should add the same action delta indices for `annotation.keyframe_weight` and `annotation.gripper_event`; decide whether annotation fields are complementary data or first-class batch keys after preprocessing; confirm gripper dim inference from `meta.info["features"]["action"]["names"]`; define exact disabled behavior tests.
-- Acceptance criteria: a design note or PR description can state exact tensor shapes for ACT `[B, chunk_size]` weights and DP `[B, horizon]` weights; old datasets without annotation columns fall back to all-ones weights; disabled config is numerically equivalent to current code.
-- Risks: annotation keys may be silently dropped by preprocessing; changing mean denominator can change loss scale; action horizon step weights can be confused with diffusion noise timesteps.
-- Do not change in this phase: training loss code, dataset schema, policy configs, dataloader sampling, scripts, or tests.
-
-Phase 1: Offline gripper transition annotation
-
-- Goal: Add a later offline annotation tool that detects gripper opening/closing transition keyframes without mutating the original dataset.
-- Files involved: future `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/debug/annotate_gripper_transition.py`; use patterns from `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/debug/annotate_dataset_phase.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/tools/preprocess_dataset.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/tools/patch_lerobot_dataset_metadata.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/tools/merge_lerobot_tasks.py`.
-- TODO items: detect opening and closing from action or gripper state; support continuous and binary gripper values; support left and right arms independently; write per-frame `annotation.gripper_event` and `annotation.keyframe_weight`; optionally write `annotation.left_gripper_event` and `annotation.right_gripper_event`; support `pre_window` and `post_window`; implement dry-run, statistics, plots, and CSV export.
-- Weight defaults to evaluate: `normal = 1.0`, `pre_closing = 2.0`, `closing = 4.0-8.0`, `post_closing = 2.0-3.0`, `pre_opening = 2.0`, `opening = 4.0-8.0`, `post_opening = 2.0-3.0`.
-- Acceptance criteria: dry-run reports transition counts and event ratios per episode; export creates a distinct dataset root with updated `meta/info.json` schema and parquet columns; videos and original data are preserved unless an explicit output copy is requested.
-- Risks: gripper conventions differ (`open=1/close=0`, `_cmd` vs `_cmd_bin`, reversed gripper config); noisy commands can create false transitions; too-wide windows can label most of an episode as keyframe.
-- Do not change in this phase: ACT/DP training, dataloaders, policy configs, deployment, robot control, or the source dataset in place.
-
-Phase 2: Dataset feature propagation
-
-- Goal: Ensure annotation columns become correctly aligned batch tensors for action chunks/horizons.
-- Files involved: `src/lerobot/datasets/factory.py`, `src/lerobot/datasets/lerobot_dataset.py`, `src/lerobot/datasets/utils.py`, `src/lerobot/processor/converters.py`, `src/lerobot/policies/act/processor_act.py`, `src/lerobot/policies/diffusion/processor_diffusion.py`.
-- TODO items: register `annotation.keyframe_weight` and `annotation.gripper_event` in dataset `meta/info.json` features and Hugging Face schema; update temporal query resolution so annotation columns use the same delta indices as `action`; verify `LeRobotDataset._get_query_indices()` returns annotation tensors and padding aligned to `action_is_pad`; preserve annotation tensors through preprocessing without normalization; add all-ones fallback weights when columns are absent; document old dataset compatibility.
-- Acceptance criteria: ACT batches expose `annotation.keyframe_weight` as `[B, chunk_size]`; DP batches expose it as `[B, horizon]`; padding is aligned with `action_is_pad`; old datasets and disabled config produce the same batch fields used by current loss code.
-- Risks: current `resolve_delta_timestamps()` only handles reward, action, and observation keys; current `batch_to_transition()` drops generic annotation keys; adding annotation keys to policy features would incorrectly normalize or classify them.
-- Do not change in this phase: actual loss weighting math, sampler behavior, policy architecture, robot data collection, or deployment.
-
-Phase 3: ACT weighted loss
-
-- Goal: Replace ACT action reconstruction loss with disabled-by-default per-timestep and per-action-dim weighting.
-- Files involved: `src/lerobot/policies/act/modeling_act.py`, `src/lerobot/policies/act/configuration_act.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/policy_config/act_train_config.yaml` for future config documentation only.
-- TODO items: keep current L1 loss as the exact disabled path; when enabled, compute `loss_per_dim = abs(pred_action - target_action)` with shape `[B, chunk_size, D]`; apply `timestep_weight` from `annotation.keyframe_weight`; apply `action_dim_weight` with gripper dims inferred from action feature names or explicit config; apply `action_is_pad` before reduction; clamp by `max_weight`; keep KLD weighting unchanged.
-- Target formula, not implemented yet:
-
-```python
-loss = mean(abs(pred_action - target_action))
-loss = masked_weighted_mean(loss_per_dim * timestep_weight * action_dim_weight)
-```
-
-- Acceptance criteria: disabled config returns bitwise or tight numeric equality with current `l1_loss`; enabled config broadcasts `[B, S]`, `[D]`, and `[B, S, D]` correctly; padded timesteps do not contribute; `loss_dict` can report `normal_frame_loss`, `keyframe_loss`, `gripper_loss`, `pose_loss`, `opening_loss`, and `closing_loss`.
-- Risks: normalizing by weight sum vs element count changes gradient scale; weighting pose dims during gripper events may overfit transition context; gripper-only weighting can ignore approach/release pose corrections.
-- Do not change in this phase: ACT model architecture, inference queueing, temporal ensembling, VAE KLD semantics, dataset writer, or DP loss.
-
-Phase 4: DP weighted denoising loss
-
-- Goal: Add disabled-by-default weighted denoising loss over action horizon steps, without confusing horizon step weights with diffusion noise timesteps.
-- Files involved: `src/lerobot/policies/diffusion/modeling_diffusion.py`, `src/lerobot/policies/diffusion/configuration_diffusion.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/policy_config/diffusion_train_config.yaml` for future config documentation only.
-- TODO items: keep current `F.mse_loss(pred, target, reduction="none").mean()` as the exact disabled path; when enabled, compute `mse_per_dim` over `[B, H, D]`; apply `horizon_weight` from `annotation.keyframe_weight`; apply `action_dim_weight`; keep `timesteps` reserved for diffusion scheduler noise timestep `[B]`; respect `action_is_pad` according to existing `do_mask_loss_for_padding` semantics unless the new config explicitly opts into masking.
-- Target formula, not implemented yet:
-
-```python
-loss = mean(mse(pred_noise, target_noise))
-loss = weighted_mean(mse_per_dim * horizon_weight * action_dim_weight)
-```
-
-- Acceptance criteria: disabled config is numerically equivalent to current DP loss; enabled config broadcasts weights over `[B, H, D]`; horizon weighting never indexes the diffusion scheduler timestep; padding behavior is documented and tested.
-- Risks: DP default currently does not mask padding; changing that by accident changes behavior; sparse transition weights can bias denoising toward gripper events and harm smooth approach trajectories.
-- Do not change in this phase: scheduler behavior, `num_train_timesteps`, inference sampling, U-Net architecture, ACT loss, or sampler.
-
-Phase 5: Optional keyframe-aware sampling
-
-- Goal: Evaluate sampling as a second-priority tool after loss weighting, only to increase batches containing transition chunks.
-- Files involved: `src/lerobot/datasets/sampler.py`, `src/lerobot/scripts/lerobot_train.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/core/run_train.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/core/dagger_sampling.py`.
-- TODO items: design a sampler that marks an index/chunk positive if its action chunk or horizon contains a transition; cap oversampling to roughly 2-4x; avoid repeating entire episodes; define interaction with existing DP `EpisodeAwareSampler` and DAgger source-aware `WeightedRandomSampler`; log transition chunk sample ratio.
-- Acceptance criteria: sampler is optional and disabled by default; loss weighting works without it; sampler never bypasses episode boundary and padding rules; batches show higher transition chunk ratio without dominating the epoch.
-- Risks: over-sampling can cause premature closing/opening or gripper jitter; PyTorch DataLoader supports only one sampler, so combining DP episode-aware dropping, DAgger source weighting, and keyframe weighting needs one deliberate sampler path.
-- Do not change in this phase: loss weighting, annotation schema, ACT/DP model code, or dataset contents.
-
-Phase 6: Metrics, debugging, and visualization
-
-- Goal: Make weighting auditable during training and annotation review.
-- Files involved: `src/lerobot/scripts/lerobot_train.py`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/core/run_train.py`, `src/lerobot/utils/logging_utils.py`, `src/lerobot/rl/wandb_utils.py`, ACT/DP `loss_dict` outputs, future annotation script.
-- TODO items: log `total_loss`, `normal_frame_loss`, `keyframe_loss`, `gripper_loss`, `pose_loss`, `opening_loss`, `closing_loss`, `keyframe_ratio_per_batch`, `weighted_loss_mean_weight`, `max_weight`, and `transition_chunk_sample_ratio`; add annotation distribution summaries and CSV/plot outputs; ensure DDP/Accelerate logging uses scalar values only.
-- Acceptance criteria: wandb receives train-prefixed scalar metrics through existing `WandBLogger.log_dict()`; local logs remain readable; annotation reports make opening/closing imbalance visible before training.
-- Risks: per-batch metrics can be noisy; logging tensors or non-scalars is ignored by current wandb wrapper; per-process metrics may need aggregation before logging.
-- Do not change in this phase: training math, model architecture, dataset export format, or deployment behavior.
-
-Phase 7: Tests and regression safety
-
-- Goal: Add focused tests before enabling the feature in real training.
-- Files involved: `tests/datasets/test_datasets.py`, `tests/datasets/test_sampler.py`, `tests/processor/test_act_processor.py`, `tests/processor/test_diffusion_processor.py`, `tests/policies/test_policies.py`, possible new focused tests under `tests/policies/` and `dual_arm_data_collection/lerobot_dual_arm_teleop/tests/`.
-- TODO items: annotation script unit tests; dataset new-column read and temporal alignment tests; ACT weighted loss shape/mask tests; DP weighted loss shape/horizon weight tests; disabled config numeric equivalence tests; padding mask exclusion tests; gripper dim weight broadcast tests; old dataset missing annotation fallback-to-ones tests; sampler cap tests if Phase 5 is implemented.
-- Acceptance criteria: disabled ACT and DP losses match old implementation values; old datasets load and train without annotation fields; padding never receives positive weighted contribution; gripper dims are inferred correctly from left/right gripper feature names.
-- Risks: end-to-end policy artifact tests are expensive and may be too broad for early loss math; random DP noise requires fixed seeds or isolated deterministic loss helpers.
-- Do not change in this phase: production configs, default training behavior, dataset files, or test artifacts unless an implementation PR explicitly requires it.
-
-Phase 8: Training and rollout validation
-
-- Goal: Validate weights gradually before real robot rollout.
-- Files involved: `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/train_cfg.yaml`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/policy_config/act_train_config.yaml`, `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/policy_config/diffusion_train_config.yaml`, deployment configs only after offline validation.
-- TODO items: run a small annotated-dataset smoke test; enable ACT first with conservative weights; then test DP; sweep `gripper_dim_weight`, event weights, and pre/post windows; compare normal vs keyframe loss curves; inspect rollout for premature close, premature open, and gripper jitter; compare before/after success metrics before real robot use.
-- Acceptance criteria: training runs with disabled and enabled configs; enabled runs show measurable keyframe loss signal without exploding total loss; rollout videos show transitions at intended task phases; real robot validation has an explicit rollback checkpoint.
-- Risks: over-weighting rare events can harm non-transition behavior; annotation mistakes can be amplified; simulation/offline metrics may not predict real gripper timing.
-- Do not change in this phase: annotation definitions mid-run, robot safety limits, default production checkpoints, or deployment policy without a validated rollback path.
+- Training defaults for ACT and Diffusion Policy must stay unchanged until disabled-by-default loss phases land.
+- Annotation export must never mutate the source dataset; new fields belong only in an explicit output copy.
+- Phase 2 still needs dataset temporal query and processor propagation before training can consume annotation tensors.

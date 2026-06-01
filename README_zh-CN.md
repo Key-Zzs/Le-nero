@@ -325,137 +325,18 @@ robot-dagger --config scripts/config/dagger_rounds_cfg.yaml
 
 ### 夹爪开合关键帧加权训练 TODO
 
-本小节只记录代码检查结果和后续实施规划。真正实现前，ACT 和 Diffusion Policy 的默认训练行为必须保持不变；所有新能力都应通过默认关闭的配置显式启用。
+- [x] Phase 1A：验证 hysteresis 夹爪开合检测器
+- [x] Phase 1B：生成带 annotation 字段的新 dataset copy
+- [ ] Phase 2：让 annotation 字段通过 dataset 和 processor 进入 batch
+- [ ] Phase 3：添加默认关闭的 ACT 加权 loss
+- [ ] Phase 4：添加默认关闭的 Diffusion Policy 加权去噪 loss
+- [ ] Phase 5：可选关键帧感知采样器
+- [ ] Phase 6：指标、调试与可视化
+- [ ] Phase 7：测试与回归安全
+- [ ] Phase 8：训练与真机验证
 
-代码路径检查摘要：
+#### 备注
 
-- 数据集入口与 action chunk / horizon 构造：`src/lerobot/datasets/factory.py`、`src/lerobot/datasets/lerobot_dataset.py`、`src/lerobot/datasets/utils.py`。
-- 训练 dataloader 与日志：`src/lerobot/scripts/lerobot_train.py`、`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/core/run_train.py`、`src/lerobot/utils/logging_utils.py`、`src/lerobot/rl/wandb_utils.py`。
-- ACT loss 与配置：`src/lerobot/policies/act/modeling_act.py`、`src/lerobot/policies/act/configuration_act.py`、`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/policy_config/act_train_config.yaml`。
-- Diffusion Policy loss 与配置：`src/lerobot/policies/diffusion/modeling_diffusion.py`、`src/lerobot/policies/diffusion/configuration_diffusion.py`、`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/policy_config/diffusion_train_config.yaml`。
-- policy feature 推断与 batch 预处理：`src/lerobot/policies/factory.py`、`src/lerobot/processor/converters.py`、`src/lerobot/policies/act/processor_act.py`、`src/lerobot/policies/diffusion/processor_diffusion.py`。
-- 可参考的已有标注、编辑、采样实现：`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/debug/annotate_dataset_phase.py`、`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/tools/preprocess_dataset.py`、`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/tools/patch_lerobot_dataset_metadata.py`、`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/tools/merge_lerobot_tasks.py`、`src/lerobot/scripts/lerobot_edit_dataset.py`、`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/core/dagger_sampling.py`。
-- 后续测试入口：`tests/datasets/test_datasets.py`、`tests/datasets/test_sampler.py`、`tests/processor/test_act_processor.py`、`tests/processor/test_diffusion_processor.py`、`tests/policies/test_policies.py`、`dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_dagger_sampling.py`。
-
-必须保持的当前行为：
-
-- ACT 通过 `ACTConfig.action_delta_indices = range(chunk_size)` 构造 action chunk。`LeRobotDataset._get_query_indices()` 会把跨越 episode 边界的索引 clamp 到 episode 内，并生成 `action_is_pad`。`ACTPolicy.forward()` 当前使用 `F.l1_loss(..., reduction="none")`，乘以 `~batch["action_is_pad"].unsqueeze(-1)` 后直接 `.mean()`；启用 VAE 时再加 `kl_weight * kld_loss`。
-- Diffusion Policy 通过 `DiffusionConfig.action_delta_indices = range(1 - n_obs_steps, 1 - n_obs_steps + horizon)` 构造 action horizon。`DiffusionModel.compute_loss()` 当前在 `[B, horizon, action_dim]` 上计算 `F.mse_loss(pred, target, reduction="none")`，仅当 `do_mask_loss_for_padding` 为 true 时使用 `action_is_pad` mask，最后 `loss.mean()`。变量 `timesteps` 是 diffusion scheduler 的噪声 timestep，shape 为 `[B]`，不能和 action horizon step 混淆。
-- parquet 新列只有写入 `meta/info.json` 的 features 后，才能通过 `LeRobotDataset.load_hf_dataset()` 使用 Hugging Face schema 读出。但是当前 `src/lerobot/processor/converters.py` 只保留 observation key、action、包含 `_is_pad` 的 padding key、task/index 元信息和 reward/done/truncated；普通 `annotation.*` 字段会在 policy preprocessing 中被丢弃。
-- action 维度名称在 `dataset.meta.features["action"]["names"]` 中，`PolicyFeature` 只有 shape/type。夹爪维度应优先从 action feature names 推断，显式配置 indices 作为 fallback。当前双臂动作名包括 `left_gripper_cmd`、`right_gripper_cmd`、`left_gripper_cmd_bin`、`right_gripper_cmd_bin` 等模式。
-
-后续配置草案，仅记录在 README 中，当前不要修改配置文件：
-
-```yaml
-loss_weighting:
-  enabled: false
-  keyframe_weight_column: "annotation.keyframe_weight"
-  gripper_event_column: "annotation.gripper_event"
-  use_timestep_weight: true
-  use_action_dim_weight: true
-  gripper_dim_indices: null
-  infer_gripper_dim_from_feature_names: true
-  gripper_dim_weight: 2.0
-  max_weight: 10.0
-  normalize_weighted_loss: true
-  apply_to_pose_dims: true
-  pose_keyframe_weight_scale: 1.0
-  apply_to_gripper_dims: true
-  gripper_keyframe_weight_scale: 1.0
-```
-
-Phase 0: 代码检查与设计确认
-
-- 目标：在实现前固定改动边界，包括 dataset 传播、ACT loss、DP loss、配置结构、日志、sampler 和测试。
-- 涉及文件：`src/lerobot/datasets/factory.py`、`src/lerobot/datasets/lerobot_dataset.py`、`src/lerobot/datasets/utils.py`、`src/lerobot/processor/converters.py`、`src/lerobot/policies/factory.py`、`src/lerobot/scripts/lerobot_train.py`、`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/core/run_train.py` 以及上文列出的 ACT/DP 文件。
-- TODO 子项：确认 annotation 字段是否作为可时间查询的 feature；确认 `resolve_delta_timestamps()` 是否要给 `annotation.keyframe_weight` 和 `annotation.gripper_event` 加上与 `action` 相同的 delta indices；确认 annotation 在 preprocessing 后作为 complementary data 还是普通 batch key 保留；确认夹爪维度从 `meta.info["features"]["action"]["names"]` 推断；定义 disabled 配置下的数值等价测试。
-- 验收标准：能明确写出 ACT 权重 shape 为 `[B, chunk_size]`，DP 权重 shape 为 `[B, horizon]`；旧数据集没有 annotation 字段时 fallback 到全 1 权重；disabled 配置与当前训练数值等价。
-- 风险点：annotation key 可能被 preprocessing 静默丢弃；mean 分母变化会改变 loss scale；action horizon step 容易和 diffusion timestep 混淆。
-- 本阶段不应改动的内容：训练 loss、dataset schema、policy config、dataloader sampler、脚本和测试。
-
-Phase 1: 离线夹爪 transition 标注
-
-- 目标：后续新增离线标注工具，识别夹爪 opening/closing 关键帧，并且不破坏原始 dataset。
-- 涉及文件：未来新增 `dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/debug/annotate_gripper_transition.py`；参考 `annotate_dataset_phase.py`、`preprocess_dataset.py`、`patch_lerobot_dataset_metadata.py`、`merge_lerobot_tasks.py`。
-- TODO 子项：从 action 或 gripper state 检测 opening/closing；支持连续夹爪值和二值夹爪值；支持左右臂分别标注；生成 `annotation.gripper_event` 和 `annotation.keyframe_weight`；可选生成 `annotation.left_gripper_event` 和 `annotation.right_gripper_event`；支持 `pre_window`、`post_window`；支持 dry-run、统计、可视化和 CSV 导出。
-- 权重初始建议：`normal = 1.0`、`pre_closing = 2.0`、`closing = 4.0-8.0`、`post_closing = 2.0-3.0`、`pre_opening = 2.0`、`opening = 4.0-8.0`、`post_opening = 2.0-3.0`。
-- 验收标准：dry-run 能输出每个 episode 的 transition 数量和比例；导出模式写入独立 dataset root，并更新 `meta/info.json` schema 和 parquet 列；视频和原始数据不被原地破坏。
-- 风险点：不同机器人夹爪约定可能不同，如 `open=1/close=0`、`_cmd` 与 `_cmd_bin`、反向夹爪配置；噪声命令可能造成误标；window 过宽会把大段 episode 标成 keyframe。
-- 本阶段不应改动的内容：ACT/DP 训练、dataloader、policy config、部署、机器人控制和原始 dataset。
-
-Phase 2: Dataset feature 传播
-
-- 目标：让 annotation 列在 action chunk / horizon 上对齐，并成为 loss 可见的 batch tensor。
-- 涉及文件：`src/lerobot/datasets/factory.py`、`src/lerobot/datasets/lerobot_dataset.py`、`src/lerobot/datasets/utils.py`、`src/lerobot/processor/converters.py`、`src/lerobot/policies/act/processor_act.py`、`src/lerobot/policies/diffusion/processor_diffusion.py`。
-- TODO 子项：在 dataset `meta/info.json` features 和 Hugging Face schema 中注册 `annotation.keyframe_weight`、`annotation.gripper_event`；让 annotation 字段使用与 `action` 相同的 temporal delta indices；验证 `LeRobotDataset._get_query_indices()` 返回与 `action_is_pad` 对齐的 annotation tensor；让 preprocessing 保留 annotation tensor 但不归一化；旧数据缺列时 fallback 到全 1 权重。
-- 验收标准：ACT batch 中 `annotation.keyframe_weight` 为 `[B, chunk_size]`；DP batch 中为 `[B, horizon]`；padding 与 `action_is_pad` 对齐；旧数据集和 disabled config 保持当前 loss 使用的字段不变。
-- 风险点：当前 `resolve_delta_timestamps()` 只处理 reward、action 和 observation；当前 `batch_to_transition()` 会丢弃普通 annotation key；如果把 annotation 加进 policy features，可能被错误归一化或错误分类。
-- 本阶段不应改动的内容：loss weighting 数学、sampler 行为、policy 架构、机器人采集和部署。
-
-Phase 3: ACT weighted loss
-
-- 目标：将 ACT action reconstruction loss 扩展为默认关闭的 per-timestep / per-action-dim weighted loss。
-- 涉及文件：`src/lerobot/policies/act/modeling_act.py`、`src/lerobot/policies/act/configuration_act.py`、`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/policy_config/act_train_config.yaml`，其中配置文件只在后续实现阶段记录新增配置，不应在当前阶段改默认行为。
-- TODO 子项：disabled 路径保持当前 L1 loss 完全等价；enabled 时计算 `[B, chunk_size, D]` 的 `loss_per_dim = abs(pred_action - target_action)`；从 `annotation.keyframe_weight` 读取 timestep weight；根据夹爪维度生成 `action_dim_weight`；先应用 `action_is_pad` 再 reduce；按 `max_weight` clamp；VAE KLD 部分保持现有语义。
-- 目标公式，当前不要实现：
-
-```python
-loss = mean(abs(pred_action - target_action))
-loss = masked_weighted_mean(loss_per_dim * timestep_weight * action_dim_weight)
-```
-
-- 验收标准：disabled config 与当前 `l1_loss` 数值一致；enabled config 正确广播 `[B, S]`、`[D]`、`[B, S, D]`；padding timestep 不参与 loss；`loss_dict` 可上报 `normal_frame_loss`、`keyframe_loss`、`gripper_loss`、`pose_loss`、`opening_loss`、`closing_loss`。
-- 风险点：按权重和归一化或按元素数归一化会改变梯度尺度；transition 事件中过度加权 pose dim 可能过拟合上下文；只加权 gripper dim 可能忽略靠近和释放阶段的位姿修正。
-- 本阶段不应改动的内容：ACT 模型结构、推理队列、temporal ensembling、VAE KLD 语义、dataset 写入和 DP loss。
-
-Phase 4: DP weighted denoising loss
-
-- 目标：为 Diffusion Policy 增加默认关闭的 action horizon step 加权 denoising loss，并避免与 diffusion noise timestep 混淆。
-- 涉及文件：`src/lerobot/policies/diffusion/modeling_diffusion.py`、`src/lerobot/policies/diffusion/configuration_diffusion.py`、`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/policy_config/diffusion_train_config.yaml`，其中配置文件只在后续实现阶段记录新增配置，不应在当前阶段改默认行为。
-- TODO 子项：disabled 路径保持当前 `F.mse_loss(pred, target, reduction="none").mean()` 完全等价；enabled 时计算 `[B, H, D]` 的 `mse_per_dim`；从 `annotation.keyframe_weight` 读取 horizon weight；应用 `action_dim_weight`；保留 `timesteps` 专指 diffusion scheduler 噪声 timestep `[B]`；padding 行为遵循当前 `do_mask_loss_for_padding` 语义，除非新配置明确要求改变。
-- 目标公式，当前不要实现：
-
-```python
-loss = mean(mse(pred_noise, target_noise))
-loss = weighted_mean(mse_per_dim * horizon_weight * action_dim_weight)
-```
-
-- 验收标准：disabled config 与当前 DP loss 数值一致；enabled config 正确广播 `[B, H, D]` 权重；horizon weight 不参与 diffusion scheduler timestep 索引；padding 行为被文档和测试覆盖。
-- 风险点：DP 默认当前不 mask padding，误改会改变行为；稀疏 transition 加权可能让 denoising 过度偏向夹爪事件，损伤平滑靠近轨迹。
-- 本阶段不应改动的内容：scheduler 行为、`num_train_timesteps`、推理采样、U-Net 架构、ACT loss 和 sampler。
-
-Phase 5: 可选 keyframe-aware sampling
-
-- 目标：将采样加权作为第二优先级能力，只用于提高包含 transition chunk 的 batch 出现概率；主方案仍是训练侧 loss weighting。
-- 涉及文件：`src/lerobot/datasets/sampler.py`、`src/lerobot/scripts/lerobot_train.py`、`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/core/run_train.py`、`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/core/dagger_sampling.py`。
-- TODO 子项：如果一个 index 对应的 action chunk / horizon 含 transition，则标为正样本；采样倍率限制在约 2-4 倍；不要过度重复整个 episode；定义与 DP `EpisodeAwareSampler` 和 DAgger source-aware `WeightedRandomSampler` 的组合策略；记录 transition chunk sample ratio。
-- 验收标准：sampler 默认关闭且可选；不开 sampler 时 loss weighting 仍可工作；sampler 不绕过 episode boundary 和 padding 规则；batch 中 transition chunk 比例提高但不过度主导 epoch。
-- 风险点：过采样可能导致提前闭合、提前张开或夹爪抖动；PyTorch DataLoader 只能直接使用一个 sampler，需要为 DP episode-aware dropping、DAgger source weighting 和 keyframe weighting 设计统一路径。
-- 本阶段不应改动的内容：loss weighting、annotation schema、ACT/DP 模型代码和 dataset 内容。
-
-Phase 6: 指标、调试与可视化
-
-- 目标：让加权训练过程可审计，便于发现标注和权重问题。
-- 涉及文件：`src/lerobot/scripts/lerobot_train.py`、`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/core/run_train.py`、`src/lerobot/utils/logging_utils.py`、`src/lerobot/rl/wandb_utils.py`、ACT/DP 的 `loss_dict` 输出、未来 annotation 脚本。
-- TODO 子项：记录 `total_loss`、`normal_frame_loss`、`keyframe_loss`、`gripper_loss`、`pose_loss`、`opening_loss`、`closing_loss`、`keyframe_ratio_per_batch`、`weighted_loss_mean_weight`、`max_weight`、`transition_chunk_sample_ratio`；增加 annotation 分布统计和 CSV/plot 输出；确保 DDP/Accelerate 下只记录 scalar。
-- 验收标准：wandb 通过现有 `WandBLogger.log_dict()` 收到 train 前缀 scalar 指标；本地日志可读；annotation report 能在训练前暴露 opening/closing 分布不均。
-- 风险点：per-batch 指标可能噪声大；当前 wandb wrapper 会忽略 tensor 或非 scalar；多进程训练可能需要先聚合再记录。
-- 本阶段不应改动的内容：训练数学、模型结构、dataset 导出格式和部署行为。
-
-Phase 7: 测试与回归安全
-
-- 目标：在真实训练启用前补齐针对性测试。
-- 涉及文件：`tests/datasets/test_datasets.py`、`tests/datasets/test_sampler.py`、`tests/processor/test_act_processor.py`、`tests/processor/test_diffusion_processor.py`、`tests/policies/test_policies.py`，以及可能新增到 `tests/policies/` 和 `dual_arm_data_collection/lerobot_dual_arm_teleop/tests/` 的专门测试。
-- TODO 子项：annotation 脚本单元测试；dataset 新增列读取和 temporal alignment 测试；ACT weighted loss shape/mask 测试；DP weighted loss shape/horizon weight 测试；disabled config 数值等价测试；padding mask 不参与加权测试；gripper dim weight 广播测试；旧 dataset 缺 annotation 字段时 fallback 到全 1 权重测试；若实现 Phase 5，补 sampler cap 测试。
-- 验收标准：disabled ACT 和 DP loss 与旧实现数值一致；旧 dataset 可以无 annotation 字段正常加载和训练；padding 不产生正向加权贡献；左右夹爪 feature name 能正确推断 gripper dim。
-- 风险点：端到端 policy artifact 测试成本高，早期 loss 数学更适合小型确定性测试；DP 随机噪声需要固定 seed 或拆出 deterministic loss helper。
-- 本阶段不应改动的内容：生产配置、默认训练行为、dataset 文件和 test artifacts，除非实现 PR 明确需要。
-
-Phase 8: 训练与 rollout 验证
-
-- 目标：在真机前逐步验证权重效果和副作用。
-- 涉及文件：`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/train_cfg.yaml`、`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/policy_config/act_train_config.yaml`、`dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/policy_config/diffusion_train_config.yaml`，部署配置只应在离线验证通过后修改。
-- TODO 子项：小数据 annotated smoke test；先只开 ACT conservative weights；再开 DP；逐步 sweep `gripper_dim_weight`、event weight 和 pre/post window；比较 normal/keyframe loss 曲线；检查 rollout 是否出现提前闭合、提前张开、夹爪抖动；真机验证前后对比成功率和失败类型。
-- 验收标准：disabled 和 enabled 配置都能完成训练；enabled 训练有可见 keyframe loss 信号但 total loss 不爆炸；rollout 视频中的开合发生在预期任务阶段；真机验证前有明确 rollback checkpoint。
-- 风险点：稀有事件过度加权可能损伤非 transition 行为；标注错误会被放大；离线或仿真指标不一定预测真实夹爪时序。
-- 本阶段不应改动的内容：训练过程中临时更改 annotation 定义、机器人安全限制、默认生产 checkpoint，以及没有 rollback 的部署策略。
+- 在默认关闭的 loss 阶段落地前，ACT 和 Diffusion Policy 的默认训练行为必须保持不变。
+- annotation 导出不能修改原始 dataset；新增字段只应写入显式指定的新 dataset copy。
+- 进入训练前仍需要 Phase 2，让 dataset temporal query 和 processor 保留 annotation tensor。
