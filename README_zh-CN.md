@@ -331,7 +331,7 @@ robot-dagger --config scripts/config/dagger_rounds_cfg.yaml
 - [x] Phase 3：添加默认关闭的 ACT 加权 loss
 - [x] Phase 4：添加默认关闭的 Diffusion Policy 加权去噪 loss
 - [x] Phase 5：可选关键帧感知采样器
-- [ ] Phase 6：指标、调试与可视化
+- [x] Phase 6：指标、调试与可视化
 - [ ] Phase 7：测试与回归安全
 - [ ] Phase 8：训练与真机验证
 

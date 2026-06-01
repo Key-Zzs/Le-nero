@@ -42,6 +42,15 @@ from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.rl.wandb_utils import WandBLogger
 from lerobot.scripts.lerobot_eval import eval_policy_all
 from lerobot.utils.logging_utils import AverageMeter, MetricsTracker
+from lerobot.utils.keyframe_metrics import (
+    cfg_get,
+    compute_batch_annotation_metrics,
+    format_scalar_metrics,
+    log_training_debug_startup,
+    normalize_debug_metrics_config,
+    scalarize_log_dict,
+    write_debug_json,
+)
 from lerobot.utils.random_utils import set_seed
 from lerobot.utils.train_utils import (
     get_step_checkpoint_dir,
@@ -282,6 +291,15 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         shuffle = True
         sampler = None
 
+    debug_metrics_cfg = normalize_debug_metrics_config(getattr(cfg, "debug_metrics", None))
+    annotation_weight_column = cfg_get(
+        cfg.keyframe_sampler, "annotation_weight_column", "annotation.keyframe_weight"
+    )
+    annotation_event_column = cfg_get(
+        cfg.keyframe_sampler, "annotation_event_column", "annotation.gripper_event"
+    )
+    keyframe_sampler_result = None
+
     if keyframe_sampler_enabled(cfg.keyframe_sampler):
         if cfg.dataset.streaming:
             raise ValueError("keyframe_sampler.enabled=true is not supported for streaming datasets.")
@@ -293,10 +311,28 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
             eligible_indices=eligible_indices,
         )
         if cfg.keyframe_sampler.log_sampler_stats and is_main_process:
-            logging.info(format_keyframe_sampler_stats(keyframe_sampler_result.stats))
+            sampler_stats_msg = format_keyframe_sampler_stats(keyframe_sampler_result.stats)
+            if keyframe_sampler_result.stats.get("keyframe_sampler/fallback_to_default"):
+                logging.warning(sampler_stats_msg)
+            else:
+                logging.info(sampler_stats_msg)
         if keyframe_sampler_result.sampler is not None:
             sampler = keyframe_sampler_result.sampler
             shuffle = False
+    else:
+        keyframe_sampler_result = build_keyframe_weighted_sampler(dataset, None, cfg.keyframe_sampler)
+
+    if is_main_process:
+        log_training_debug_startup(
+            dataset=dataset,
+            output_dir=cfg.output_dir,
+            debug_metrics_config=debug_metrics_cfg,
+            annotation_weight_column=annotation_weight_column,
+            annotation_event_column=annotation_event_column,
+            sampler_stats=keyframe_sampler_result.stats if keyframe_sampler_result is not None else None,
+            wandb_logger=wandb_logger,
+            step=step,
+        )
 
     dataloader = torch.utils.data.DataLoader(
         dataset,
@@ -340,11 +376,29 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     if is_main_process:
         logging.info("Start offline training on a fixed dataset")
 
+    batch_metrics_preview: list[dict[str, Any]] = []
+
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
         batch = next(dl_iter)
         batch = preprocessor(batch)
         train_tracker.dataloading_s = time.perf_counter() - start_time
+        next_step = step + 1
+        should_preview_batch_metrics = (
+            debug_metrics_cfg["enabled"]
+            and debug_metrics_cfg["write_batch_metrics_preview"]
+            and len(batch_metrics_preview) < debug_metrics_cfg["max_preview_batches"]
+        )
+        should_log_batch_metrics = cfg.log_freq > 0 and next_step % cfg.log_freq == 0
+        batch_annotation_metrics = {}
+        if is_main_process and debug_metrics_cfg["enabled"] and (
+            should_log_batch_metrics or should_preview_batch_metrics
+        ):
+            batch_annotation_metrics = compute_batch_annotation_metrics(
+                batch,
+                annotation_weight_column=annotation_weight_column,
+                annotation_event_column=annotation_event_column,
+            )
 
         train_tracker, output_dict = update_policy(
             train_tracker,
@@ -366,12 +420,21 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
 
         if is_log_step:
             logging.info(train_tracker)
+            scalar_output_dict = scalarize_log_dict(output_dict or {})
+            if batch_annotation_metrics:
+                scalar_output_dict.update(batch_annotation_metrics)
+            if scalar_output_dict:
+                logging.info("train extra metrics: %s", format_scalar_metrics(scalar_output_dict))
             if wandb_logger:
                 wandb_log_dict = train_tracker.to_dict()
-                if output_dict:
-                    wandb_log_dict.update(output_dict)
+                if scalar_output_dict:
+                    wandb_log_dict.update(scalar_output_dict)
                 wandb_logger.log_dict(wandb_log_dict, step)
             train_tracker.reset_averages()
+
+        if is_main_process and should_preview_batch_metrics and batch_annotation_metrics:
+            batch_metrics_preview.append({"step": step, **batch_annotation_metrics})
+            write_debug_json(cfg.output_dir, "batch_annotation_preview.json", batch_metrics_preview)
 
         if cfg.save_checkpoint and is_saving_step:
             if is_main_process:

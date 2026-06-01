@@ -327,7 +327,7 @@ Common key controls during collection:
 - [x] Phase 3: Add disabled-by-default ACT weighted loss
 - [x] Phase 4: Add disabled-by-default Diffusion Policy weighted denoising loss
 - [x] Phase 5: Optional keyframe-aware sampler
-- [ ] Phase 6: Metrics, debugging, and visualization
+- [x] Phase 6: Metrics, debugging, and visualization
 - [ ] Phase 7: Tests and regression safety
 - [ ] Phase 8: Training and rollout validation
 

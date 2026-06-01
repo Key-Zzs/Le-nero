@@ -339,25 +339,50 @@ def compute_weighted_action_l1_loss(
         keyframe_mask = (timestep_weight.squeeze(-1) > 1.0) & valid_timestep_mask
         normal_mask = (timestep_weight.squeeze(-1) <= 1.0) & valid_timestep_mask
 
-        _add_metric(metrics, "loss/action_l1_unweighted", _masked_mean(loss_per_dim, valid_dim_mask))
+        action_l1_unweighted = _masked_mean(loss_per_dim, valid_dim_mask)
+        _add_metric(metrics, "loss/action_l1_unweighted", action_l1_unweighted)
+        _add_metric(metrics, "loss/act_action_l1_unweighted", action_l1_unweighted)
         metrics["loss/action_l1_weighted"] = loss.detach()
-        _add_metric(metrics, "loss/keyframe_l1", _masked_mean(loss_per_dim, keyframe_mask))
-        _add_metric(metrics, "loss/normal_l1", _masked_mean(loss_per_dim, normal_mask))
+        metrics["loss/act_action_l1_weighted"] = loss.detach()
+        keyframe_l1 = _masked_mean(loss_per_dim, keyframe_mask)
+        normal_l1 = _masked_mean(loss_per_dim, normal_mask)
+        _add_metric(metrics, "loss/keyframe_l1", keyframe_l1)
+        _add_metric(metrics, "loss/act_keyframe_l1", keyframe_l1)
+        _add_metric(metrics, "loss/normal_l1", normal_l1)
+        _add_metric(metrics, "loss/act_normal_l1", normal_l1)
+        valid_timestep_count = valid_timestep_mask.to(dtype=loss_per_dim.dtype).sum().clamp_min(1e-6)
         metrics["loss/keyframe_ratio"] = (
-            keyframe_mask.to(dtype=loss_per_dim.dtype).sum()
-            / valid_timestep_mask.to(dtype=loss_per_dim.dtype).sum().clamp_min(1e-6)
+            keyframe_mask.to(dtype=loss_per_dim.dtype).sum() / valid_timestep_count
         ).detach()
-        _add_metric(metrics, "loss/mean_timestep_weight", _masked_mean(timestep_weight, valid_timestep_mask))
-        _add_metric(metrics, "loss/max_timestep_weight", timestep_weight[valid_timestep_mask].max() if valid_timestep_mask.any() else None)
+        metrics["loss/normal_ratio"] = (
+            normal_mask.to(dtype=loss_per_dim.dtype).sum() / valid_timestep_count
+        ).detach()
+        mean_annotation_weight = _masked_mean(timestep_weight, valid_timestep_mask)
+        max_annotation_weight = (
+            timestep_weight[valid_timestep_mask].max() if valid_timestep_mask.any() else None
+        )
+        _add_metric(metrics, "loss/mean_timestep_weight", mean_annotation_weight)
+        _add_metric(metrics, "loss/max_timestep_weight", max_annotation_weight)
+        _add_metric(metrics, "loss/mean_annotation_weight", mean_annotation_weight)
+        _add_metric(metrics, "loss/max_annotation_weight", max_annotation_weight)
         _add_metric(metrics, "loss/mean_effective_weight", _masked_mean(effective_weight, valid_dim_mask))
+        _add_metric(
+            metrics,
+            "loss/max_effective_weight",
+            effective_weight[valid_dim_mask].max() if valid_dim_mask.any() else None,
+        )
 
         gripper_dim_mask = torch.zeros(action_dim, dtype=torch.bool, device=loss_per_dim.device)
         if gripper_dim_indices:
             gripper_dim_mask[gripper_dim_indices] = True
-            _add_metric(metrics, "loss/gripper_l1", _masked_mean(loss_per_dim, valid_dim_mask & gripper_dim_mask))
+            gripper_l1 = _masked_mean(loss_per_dim, valid_dim_mask & gripper_dim_mask)
+            _add_metric(metrics, "loss/gripper_l1", gripper_l1)
+            _add_metric(metrics, "loss/act_gripper_l1", gripper_l1)
         pose_dim_mask = ~gripper_dim_mask
         if pose_dim_mask.any():
-            _add_metric(metrics, "loss/pose_l1", _masked_mean(loss_per_dim, valid_dim_mask & pose_dim_mask))
+            pose_l1 = _masked_mean(loss_per_dim, valid_dim_mask & pose_dim_mask)
+            _add_metric(metrics, "loss/pose_l1", pose_l1)
+            _add_metric(metrics, "loss/act_pose_l1", pose_l1)
 
         event = _get_event_tensor(
             batch,
@@ -366,8 +391,12 @@ def compute_weighted_action_l1_loss(
             device=loss_per_dim.device,
         )
         if event is not None:
-            _add_metric(metrics, "loss/closing_l1", _masked_mean(loss_per_dim, (event == 2) & valid_timestep_mask))
-            _add_metric(metrics, "loss/opening_l1", _masked_mean(loss_per_dim, (event == 5) & valid_timestep_mask))
+            closing_l1 = _masked_mean(loss_per_dim, (event == 2) & valid_timestep_mask)
+            opening_l1 = _masked_mean(loss_per_dim, (event == 5) & valid_timestep_mask)
+            _add_metric(metrics, "loss/closing_l1", closing_l1)
+            _add_metric(metrics, "loss/act_closing_l1", closing_l1)
+            _add_metric(metrics, "loss/opening_l1", opening_l1)
+            _add_metric(metrics, "loss/act_opening_l1", opening_l1)
 
     return loss, metrics
 
@@ -565,6 +594,10 @@ class ACTPolicy(PreTrainedPolicy):
             loss_breakdown = {}
         loss_dict = {"l1_loss": l1_loss.item()}
         loss_dict.update({key: value.item() for key, value in loss_breakdown.items()})
+        if self.config.loss_weighting.enabled:
+            weighted_l1 = l1_loss.detach().item()
+            loss_dict.setdefault("loss/action_l1_weighted", weighted_l1)
+            loss_dict.setdefault("loss/act_action_l1_weighted", weighted_l1)
         if self.config.use_vae:
             # Calculate Dₖₗ(latent_pdf || standard_normal). Note: After computing the KL-divergence for
             # each dimension independently, we sum over the latent dimension to get the total
@@ -578,6 +611,7 @@ class ACTPolicy(PreTrainedPolicy):
         else:
             loss = l1_loss
 
+        loss_dict["loss/total"] = loss.detach().item()
         return loss, loss_dict
 
 

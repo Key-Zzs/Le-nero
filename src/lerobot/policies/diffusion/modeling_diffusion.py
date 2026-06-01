@@ -373,29 +373,52 @@ def compute_weighted_denoising_mse_loss(
         keyframe_mask = (horizon_weight.squeeze(-1) > 1.0) & valid_horizon_mask
         normal_mask = (horizon_weight.squeeze(-1) <= 1.0) & valid_horizon_mask
 
-        _add_metric(metrics, "loss/denoising_mse_unweighted", _masked_mean(mse_per_dim, valid_dim_mask))
+        denoising_mse_unweighted = _masked_mean(mse_per_dim, valid_dim_mask)
+        _add_metric(metrics, "loss/denoising_mse_unweighted", denoising_mse_unweighted)
+        _add_metric(metrics, "loss/dp_denoising_mse_unweighted", denoising_mse_unweighted)
         metrics["loss/denoising_mse_weighted"] = loss.detach()
-        _add_metric(metrics, "loss/keyframe_mse", _masked_mean(mse_per_dim, keyframe_mask))
-        _add_metric(metrics, "loss/normal_mse", _masked_mean(mse_per_dim, normal_mask))
+        metrics["loss/dp_denoising_mse_weighted"] = loss.detach()
+        keyframe_mse = _masked_mean(mse_per_dim, keyframe_mask)
+        normal_mse = _masked_mean(mse_per_dim, normal_mask)
+        _add_metric(metrics, "loss/keyframe_mse", keyframe_mse)
+        _add_metric(metrics, "loss/dp_keyframe_mse", keyframe_mse)
+        _add_metric(metrics, "loss/normal_mse", normal_mse)
+        _add_metric(metrics, "loss/dp_normal_mse", normal_mse)
+        valid_horizon_count = valid_horizon_mask.to(dtype=mse_per_dim.dtype).sum().clamp_min(1e-6)
         metrics["loss/keyframe_ratio"] = (
-            keyframe_mask.to(dtype=mse_per_dim.dtype).sum()
-            / valid_horizon_mask.to(dtype=mse_per_dim.dtype).sum().clamp_min(1e-6)
+            keyframe_mask.to(dtype=mse_per_dim.dtype).sum() / valid_horizon_count
         ).detach()
-        _add_metric(metrics, "loss/mean_horizon_weight", _masked_mean(horizon_weight, valid_horizon_mask))
+        metrics["loss/normal_ratio"] = (
+            normal_mask.to(dtype=mse_per_dim.dtype).sum() / valid_horizon_count
+        ).detach()
+        mean_annotation_weight = _masked_mean(horizon_weight, valid_horizon_mask)
+        max_annotation_weight = horizon_weight[valid_horizon_mask].max() if valid_horizon_mask.any() else None
+        _add_metric(metrics, "loss/mean_horizon_weight", mean_annotation_weight)
         _add_metric(
             metrics,
             "loss/max_horizon_weight",
-            horizon_weight[valid_horizon_mask].max() if valid_horizon_mask.any() else None,
+            max_annotation_weight,
         )
+        _add_metric(metrics, "loss/mean_annotation_weight", mean_annotation_weight)
+        _add_metric(metrics, "loss/max_annotation_weight", max_annotation_weight)
         _add_metric(metrics, "loss/mean_effective_weight", _masked_mean(effective_weight, valid_dim_mask))
+        _add_metric(
+            metrics,
+            "loss/max_effective_weight",
+            effective_weight[valid_dim_mask].max() if valid_dim_mask.any() else None,
+        )
 
         gripper_dim_mask = torch.zeros(action_dim, dtype=torch.bool, device=mse_per_dim.device)
         if gripper_dim_indices:
             gripper_dim_mask[gripper_dim_indices] = True
-            _add_metric(metrics, "loss/gripper_mse", _masked_mean(mse_per_dim, valid_dim_mask & gripper_dim_mask))
+            gripper_mse = _masked_mean(mse_per_dim, valid_dim_mask & gripper_dim_mask)
+            _add_metric(metrics, "loss/gripper_mse", gripper_mse)
+            _add_metric(metrics, "loss/dp_gripper_mse", gripper_mse)
         pose_dim_mask = ~gripper_dim_mask
         if pose_dim_mask.any():
-            _add_metric(metrics, "loss/pose_mse", _masked_mean(mse_per_dim, valid_dim_mask & pose_dim_mask))
+            pose_mse = _masked_mean(mse_per_dim, valid_dim_mask & pose_dim_mask)
+            _add_metric(metrics, "loss/pose_mse", pose_mse)
+            _add_metric(metrics, "loss/dp_pose_mse", pose_mse)
 
         event = _get_event_tensor(
             batch,
@@ -404,8 +427,12 @@ def compute_weighted_denoising_mse_loss(
             device=mse_per_dim.device,
         )
         if event is not None:
-            _add_metric(metrics, "loss/closing_mse", _masked_mean(mse_per_dim, (event == 2) & valid_horizon_mask))
-            _add_metric(metrics, "loss/opening_mse", _masked_mean(mse_per_dim, (event == 5) & valid_horizon_mask))
+            closing_mse = _masked_mean(mse_per_dim, (event == 2) & valid_horizon_mask)
+            opening_mse = _masked_mean(mse_per_dim, (event == 5) & valid_horizon_mask)
+            _add_metric(metrics, "loss/closing_mse", closing_mse)
+            _add_metric(metrics, "loss/dp_closing_mse", closing_mse)
+            _add_metric(metrics, "loss/opening_mse", opening_mse)
+            _add_metric(metrics, "loss/dp_opening_mse", opening_mse)
 
     return loss, metrics
 
@@ -722,7 +749,7 @@ class DiffusionModel(nn.Module):
 
         action_is_pad = batch.get("action_is_pad")
         if self.config.loss_weighting.enabled:
-            return compute_weighted_denoising_mse_loss(
+            loss, loss_breakdown = compute_weighted_denoising_mse_loss(
                 pred,
                 target,
                 action_is_pad,
@@ -730,9 +757,15 @@ class DiffusionModel(nn.Module):
                 self.config,
                 action_dim_names=getattr(self.config, "_action_feature_names", None),
             )
+            loss_dict = {key: value.detach().item() for key, value in loss_breakdown.items()}
+            weighted_mse = loss.detach().item()
+            loss_dict.setdefault("loss/denoising_mse_weighted", weighted_mse)
+            loss_dict.setdefault("loss/dp_denoising_mse_weighted", weighted_mse)
+            loss_dict["loss/total"] = weighted_mse
+            return loss, loss_dict
 
         loss = compute_unweighted_denoising_mse_loss(pred, target, action_is_pad, self.config)
-        return loss, {}
+        return loss, {"loss/total": loss.detach().item()}
 
 
 class SpatialSoftmax(nn.Module):
