@@ -368,7 +368,7 @@ def make_policy(
         cfg.output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
     if not cfg.input_features:
         cfg.input_features = {key: ft for key, ft in features.items() if key not in cfg.output_features}
-    if isinstance(cfg, ACTConfig) and ds_meta is not None:
+    if isinstance(cfg, (ACTConfig, DiffusionConfig)) and ds_meta is not None:
         action_names = ds_meta.features.get(ACTION, {}).get("names")
         if isinstance(action_names, list):
             cfg._action_feature_names = action_names

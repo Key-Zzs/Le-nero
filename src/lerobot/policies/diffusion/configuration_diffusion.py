@@ -22,6 +22,27 @@ from lerobot.optim.optimizers import AdamConfig
 from lerobot.optim.schedulers import DiffuserSchedulerConfig
 
 
+@dataclass
+class DiffusionLossWeightingConfig:
+    """Optional Diffusion denoising-loss weighting. Disabled by default for backward compatibility."""
+
+    enabled: bool = False
+    keyframe_weight_column: str = "annotation.keyframe_weight"
+    gripper_event_column: str = "annotation.gripper_event"
+    use_horizon_weight: bool = True
+    use_action_dim_weight: bool = True
+    gripper_dim_indices: list[int] | None = None
+    infer_gripper_dim_from_feature_names: bool = True
+    gripper_dim_weight: float = 2.0
+    max_weight: float = 10.0
+    normalize_weighted_loss: bool = True
+    apply_to_pose_dims: bool = True
+    pose_keyframe_weight_scale: float = 1.0
+    apply_to_gripper_dims: bool = True
+    gripper_keyframe_weight_scale: float = 1.0
+    log_weighted_loss_breakdown: bool = True
+
+
 @PreTrainedConfig.register_subclass("diffusion")
 @dataclass
 class DiffusionConfig(PreTrainedConfig):
@@ -150,6 +171,7 @@ class DiffusionConfig(PreTrainedConfig):
 
     # Loss computation
     do_mask_loss_for_padding: bool = False
+    loss_weighting: DiffusionLossWeightingConfig = field(default_factory=DiffusionLossWeightingConfig)
 
     # Training presets
     optimizer_lr: float = 1e-4
@@ -161,6 +183,9 @@ class DiffusionConfig(PreTrainedConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if isinstance(self.loss_weighting, dict):
+            self.loss_weighting = DiffusionLossWeightingConfig(**self.loss_weighting)
 
         """Input validation (not exhaustive)."""
         if not self.vision_backbone.startswith("resnet"):
@@ -188,6 +213,10 @@ class DiffusionConfig(PreTrainedConfig):
                 "The horizon should be an integer multiple of the downsampling factor (which is determined "
                 f"by `len(down_dims)`). Got {self.horizon=} and {self.down_dims=}"
             )
+        if self.loss_weighting.max_weight <= 0:
+            raise ValueError("`loss_weighting.max_weight` must be > 0.")
+        if self.loss_weighting.gripper_dim_weight < 0:
+            raise ValueError("`loss_weighting.gripper_dim_weight` must be >= 0.")
 
     def get_optimizer_preset(self) -> AdamConfig:
         return AdamConfig(
