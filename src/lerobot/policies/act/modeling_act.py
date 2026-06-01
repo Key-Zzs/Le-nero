@@ -19,6 +19,7 @@ As per Learning Fine-Grained Bimanual Manipulation with Low-Cost Hardware (https
 The majority of changes here involve removing unused code, unifying naming, and adding helpful comments.
 """
 
+import logging
 import math
 from collections import deque
 from collections.abc import Callable
@@ -38,11 +39,337 @@ from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
 
-
 _BASIC_BLOCK_RESNET_LAYERS = {
     "resnet18": [2, 2, 2, 2],
     "resnet34": [3, 4, 6, 3],
 }
+
+GRIPPER_ACTION_DIM_NAMES = {
+    "left_gripper_cmd",
+    "right_gripper_cmd",
+    "left_gripper_cmd_bin",
+    "right_gripper_cmd_bin",
+    "left_gripper",
+    "right_gripper",
+    "gripper",
+}
+
+_LOSS_WEIGHTING_WARNINGS: set[str] = set()
+
+logger = logging.getLogger(__name__)
+
+
+def _warn_loss_weighting_once(message: str) -> None:
+    if message in _LOSS_WEIGHTING_WARNINGS:
+        return
+    _LOSS_WEIGHTING_WARNINGS.add(message)
+    logger.warning("ACT loss_weighting: %s", message)
+
+
+def infer_gripper_dim_indices(
+    action_dim: int,
+    *,
+    explicit_indices: list[int] | None = None,
+    action_dim_names: list[str] | tuple[str, ...] | None = None,
+) -> list[int]:
+    """Resolve gripper action dimensions from explicit config or action feature names."""
+    if explicit_indices is not None:
+        resolved = []
+        for index in explicit_indices:
+            index = int(index)
+            if 0 <= index < action_dim and index not in resolved:
+                resolved.append(index)
+            else:
+                _warn_loss_weighting_once(
+                    f"ignoring invalid gripper_dim_indices entry {index} for action_dim={action_dim}"
+                )
+        return resolved
+
+    if action_dim_names is None:
+        return []
+    if len(action_dim_names) != action_dim:
+        _warn_loss_weighting_once(
+            "cannot infer gripper dims because action feature names length "
+            f"({len(action_dim_names)}) does not match action_dim ({action_dim})"
+        )
+        return []
+
+    resolved = []
+    for index, name in enumerate(action_dim_names):
+        normalized_name = str(name).strip().lower()
+        leaf_name = normalized_name.rsplit(".", maxsplit=1)[-1].rsplit("/", maxsplit=1)[-1]
+        if normalized_name in GRIPPER_ACTION_DIM_NAMES or leaf_name in GRIPPER_ACTION_DIM_NAMES:
+            resolved.append(index)
+    return resolved
+
+
+def compute_unweighted_action_l1_loss(
+    pred_action: Tensor,
+    target_action: Tensor,
+    action_is_pad: Tensor,
+) -> Tensor:
+    """Original ACT action L1 loss, including padded zeros in the final mean denominator."""
+    return (
+        F.l1_loss(target_action, pred_action, reduction="none") * ~action_is_pad.unsqueeze(-1)
+    ).mean()
+
+
+def _get_timestep_weight(
+    batch: dict[str, Tensor],
+    key: str,
+    *,
+    shape: tuple[int, int],
+    like: Tensor,
+    max_weight: float,
+) -> Tensor:
+    raw_weight = batch.get(key)
+    if raw_weight is None:
+        _warn_loss_weighting_once(f"missing '{key}', falling back to timestep weight 1")
+        return torch.ones((*shape, 1), dtype=like.dtype, device=like.device)
+    if not isinstance(raw_weight, Tensor):
+        _warn_loss_weighting_once(f"'{key}' is not a tensor, falling back to timestep weight 1")
+        return torch.ones((*shape, 1), dtype=like.dtype, device=like.device)
+
+    weight = raw_weight.to(device=like.device, dtype=like.dtype)
+    if weight.ndim == 3 and weight.shape[-1] == 1:
+        weight = weight.squeeze(-1)
+    if tuple(weight.shape) != shape:
+        _warn_loss_weighting_once(
+            f"'{key}' has shape {tuple(weight.shape)}, expected {shape}; falling back to timestep weight 1"
+        )
+        return torch.ones((*shape, 1), dtype=like.dtype, device=like.device)
+
+    weight = torch.nan_to_num(weight, nan=1.0, posinf=max_weight, neginf=1.0)
+    return weight.clamp(min=0.0, max=max_weight).unsqueeze(-1)
+
+
+def _scale_timestep_weight(timestep_weight: Tensor, scale: float, max_weight: float) -> Tensor:
+    scaled = 1.0 + (timestep_weight - 1.0) * float(scale)
+    return scaled.clamp(min=0.0, max=max_weight)
+
+
+def _build_timestep_dim_weight(
+    timestep_weight: Tensor,
+    *,
+    action_dim: int,
+    gripper_dim_indices: list[int],
+    config: ACTConfig,
+) -> Tensor:
+    weighting_cfg = config.loss_weighting
+    if not weighting_cfg.use_timestep_weight:
+        return torch.ones(
+            (*timestep_weight.shape[:2], action_dim),
+            dtype=timestep_weight.dtype,
+            device=timestep_weight.device,
+        )
+
+    weight = torch.ones(
+        (*timestep_weight.shape[:2], action_dim),
+        dtype=timestep_weight.dtype,
+        device=timestep_weight.device,
+    )
+    gripper_mask = torch.zeros(action_dim, dtype=torch.bool, device=timestep_weight.device)
+    if gripper_dim_indices:
+        gripper_mask[gripper_dim_indices] = True
+    pose_mask = ~gripper_mask
+
+    if weighting_cfg.apply_to_pose_dims and pose_mask.any():
+        weight[..., pose_mask] = _scale_timestep_weight(
+            timestep_weight,
+            weighting_cfg.pose_keyframe_weight_scale,
+            weighting_cfg.max_weight,
+        )
+    if weighting_cfg.apply_to_gripper_dims and gripper_mask.any():
+        weight[..., gripper_mask] = _scale_timestep_weight(
+            timestep_weight,
+            weighting_cfg.gripper_keyframe_weight_scale,
+            weighting_cfg.max_weight,
+        )
+    return weight
+
+
+def _build_action_dim_weight(
+    action_dim: int,
+    *,
+    gripper_dim_indices: list[int],
+    like: Tensor,
+    config: ACTConfig,
+) -> Tensor:
+    weighting_cfg = config.loss_weighting
+    action_dim_weight = torch.ones((1, 1, action_dim), dtype=like.dtype, device=like.device)
+    if weighting_cfg.use_action_dim_weight and gripper_dim_indices:
+        action_dim_weight[..., gripper_dim_indices] = float(weighting_cfg.gripper_dim_weight)
+    return torch.nan_to_num(
+        action_dim_weight,
+        nan=1.0,
+        posinf=weighting_cfg.max_weight,
+        neginf=1.0,
+    ).clamp(min=0.0, max=weighting_cfg.max_weight)
+
+
+def _masked_mean(value: Tensor, mask: Tensor) -> Tensor | None:
+    mask = mask.to(dtype=value.dtype, device=value.device)
+    while mask.ndim < value.ndim:
+        mask = mask.unsqueeze(-1)
+    if mask.shape != value.shape:
+        mask = mask.expand_as(value)
+    denominator = mask.sum()
+    if denominator <= 0:
+        return None
+    return (value * mask).sum() / denominator.clamp_min(1e-6)
+
+
+def _add_metric(metrics: dict[str, Tensor], key: str, value: Tensor | None) -> None:
+    if value is not None:
+        metrics[key] = value.detach()
+
+
+def _get_event_tensor(
+    batch: dict[str, Tensor],
+    key: str,
+    *,
+    shape: tuple[int, int],
+    device: torch.device,
+) -> Tensor | None:
+    event = batch.get(key)
+    if event is None or not isinstance(event, Tensor):
+        return None
+    event = event.to(device=device)
+    if event.ndim == 3 and event.shape[-1] == 1:
+        event = event.squeeze(-1)
+    if tuple(event.shape) != shape:
+        _warn_loss_weighting_once(
+            f"'{key}' has shape {tuple(event.shape)}, expected {shape}; skipping event breakdown"
+        )
+        return None
+    return event.to(dtype=torch.long)
+
+
+def compute_weighted_action_l1_loss(
+    pred_action: Tensor,
+    target_action: Tensor,
+    action_is_pad: Tensor | None,
+    batch: dict[str, Tensor],
+    config: ACTConfig,
+    action_dim_names: list[str] | tuple[str, ...] | None = None,
+) -> tuple[Tensor, dict[str, Tensor]]:
+    """Compute enabled ACT weighted action L1 loss and detached logging metrics."""
+    if pred_action.shape != target_action.shape or pred_action.ndim != 3:
+        raise ValueError(
+            "pred_action and target_action must have matching [B, S, D] shapes. "
+            f"Got {tuple(pred_action.shape)} and {tuple(target_action.shape)}."
+        )
+
+    batch_size, chunk_size, action_dim = pred_action.shape
+    weighting_cfg = config.loss_weighting
+    loss_per_dim = F.l1_loss(pred_action, target_action, reduction="none")
+
+    if action_is_pad is None:
+        _warn_loss_weighting_once("missing 'action_is_pad', treating all action steps as valid")
+        valid_mask = torch.ones((batch_size, chunk_size, 1), dtype=loss_per_dim.dtype, device=loss_per_dim.device)
+    else:
+        if tuple(action_is_pad.shape) != (batch_size, chunk_size):
+            raise ValueError(
+                "action_is_pad must have shape [B, S]. "
+                f"Got {tuple(action_is_pad.shape)}, expected {(batch_size, chunk_size)}."
+            )
+        valid_mask = (~action_is_pad.to(device=loss_per_dim.device, dtype=torch.bool)).unsqueeze(-1)
+        valid_mask = valid_mask.to(dtype=loss_per_dim.dtype)
+
+    timestep_weight = _get_timestep_weight(
+        batch,
+        weighting_cfg.keyframe_weight_column,
+        shape=(batch_size, chunk_size),
+        like=loss_per_dim,
+        max_weight=weighting_cfg.max_weight,
+    )
+
+    gripper_dim_indices = []
+    needs_gripper_dims = (
+        weighting_cfg.use_action_dim_weight
+        or weighting_cfg.log_weighted_loss_breakdown
+        or (
+            weighting_cfg.use_timestep_weight
+            and (
+                weighting_cfg.apply_to_pose_dims != weighting_cfg.apply_to_gripper_dims
+                or weighting_cfg.pose_keyframe_weight_scale != weighting_cfg.gripper_keyframe_weight_scale
+            )
+        )
+    )
+    if needs_gripper_dims:
+        names = action_dim_names if weighting_cfg.infer_gripper_dim_from_feature_names else None
+        gripper_dim_indices = infer_gripper_dim_indices(
+            action_dim,
+            explicit_indices=weighting_cfg.gripper_dim_indices,
+            action_dim_names=names,
+        )
+        if weighting_cfg.use_action_dim_weight and not gripper_dim_indices:
+            _warn_loss_weighting_once(
+                "could not resolve gripper action dims; using timestep weights without gripper dim weight"
+            )
+
+    timestep_dim_weight = _build_timestep_dim_weight(
+        timestep_weight,
+        action_dim=action_dim,
+        gripper_dim_indices=gripper_dim_indices,
+        config=config,
+    )
+    action_dim_weight = _build_action_dim_weight(
+        action_dim,
+        gripper_dim_indices=gripper_dim_indices,
+        like=loss_per_dim,
+        config=config,
+    )
+
+    effective_weight = valid_mask * timestep_dim_weight * action_dim_weight
+    weighted_loss = loss_per_dim * effective_weight
+    if weighting_cfg.normalize_weighted_loss:
+        denominator = effective_weight.sum().clamp_min(1e-6)
+    else:
+        denominator = torch.tensor(loss_per_dim.numel(), dtype=loss_per_dim.dtype, device=loss_per_dim.device)
+    loss = weighted_loss.sum() / denominator
+
+    metrics: dict[str, Tensor] = {}
+    if not weighting_cfg.log_weighted_loss_breakdown:
+        return loss, metrics
+
+    with torch.no_grad():
+        valid_timestep_mask = valid_mask.squeeze(-1) > 0
+        valid_dim_mask = valid_mask.expand_as(loss_per_dim) > 0
+        keyframe_mask = (timestep_weight.squeeze(-1) > 1.0) & valid_timestep_mask
+        normal_mask = (timestep_weight.squeeze(-1) <= 1.0) & valid_timestep_mask
+
+        _add_metric(metrics, "loss/action_l1_unweighted", _masked_mean(loss_per_dim, valid_dim_mask))
+        metrics["loss/action_l1_weighted"] = loss.detach()
+        _add_metric(metrics, "loss/keyframe_l1", _masked_mean(loss_per_dim, keyframe_mask))
+        _add_metric(metrics, "loss/normal_l1", _masked_mean(loss_per_dim, normal_mask))
+        metrics["loss/keyframe_ratio"] = (
+            keyframe_mask.to(dtype=loss_per_dim.dtype).sum()
+            / valid_timestep_mask.to(dtype=loss_per_dim.dtype).sum().clamp_min(1e-6)
+        ).detach()
+        _add_metric(metrics, "loss/mean_timestep_weight", _masked_mean(timestep_weight, valid_timestep_mask))
+        _add_metric(metrics, "loss/max_timestep_weight", timestep_weight[valid_timestep_mask].max() if valid_timestep_mask.any() else None)
+        _add_metric(metrics, "loss/mean_effective_weight", _masked_mean(effective_weight, valid_dim_mask))
+
+        gripper_dim_mask = torch.zeros(action_dim, dtype=torch.bool, device=loss_per_dim.device)
+        if gripper_dim_indices:
+            gripper_dim_mask[gripper_dim_indices] = True
+            _add_metric(metrics, "loss/gripper_l1", _masked_mean(loss_per_dim, valid_dim_mask & gripper_dim_mask))
+        pose_dim_mask = ~gripper_dim_mask
+        if pose_dim_mask.any():
+            _add_metric(metrics, "loss/pose_l1", _masked_mean(loss_per_dim, valid_dim_mask & pose_dim_mask))
+
+        event = _get_event_tensor(
+            batch,
+            weighting_cfg.gripper_event_column,
+            shape=(batch_size, chunk_size),
+            device=loss_per_dim.device,
+        )
+        if event is not None:
+            _add_metric(metrics, "loss/closing_l1", _masked_mean(loss_per_dim, (event == 2) & valid_timestep_mask))
+            _add_metric(metrics, "loss/opening_l1", _masked_mean(loss_per_dim, (event == 5) & valid_timestep_mask))
+
+    return loss, metrics
 
 
 class _DilatedBasicBlock(nn.Module):
@@ -220,11 +547,24 @@ class ACTPolicy(PreTrainedPolicy):
 
         actions_hat, (mu_hat, log_sigma_x2_hat) = self.model(batch)
 
-        l1_loss = (
-            F.l1_loss(batch[ACTION], actions_hat, reduction="none") * ~batch["action_is_pad"].unsqueeze(-1)
-        ).mean()
-
+        if self.config.loss_weighting.enabled:
+            l1_loss, loss_breakdown = compute_weighted_action_l1_loss(
+                actions_hat,
+                batch[ACTION],
+                batch.get("action_is_pad"),
+                batch,
+                self.config,
+                action_dim_names=getattr(self.config, "_action_feature_names", None),
+            )
+        else:
+            l1_loss = compute_unweighted_action_l1_loss(
+                actions_hat,
+                batch[ACTION],
+                batch["action_is_pad"],
+            )
+            loss_breakdown = {}
         loss_dict = {"l1_loss": l1_loss.item()}
+        loss_dict.update({key: value.item() for key, value in loss_breakdown.items()})
         if self.config.use_vae:
             # Calculate Dₖₗ(latent_pdf || standard_normal). Note: After computing the KL-divergence for
             # each dimension independently, we sum over the latent dimension to get the total

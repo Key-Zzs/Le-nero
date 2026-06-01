@@ -20,6 +20,27 @@ from lerobot.configs.types import NormalizationMode
 from lerobot.optim.optimizers import AdamWConfig
 
 
+@dataclass
+class ACTLossWeightingConfig:
+    """Optional ACT action-loss weighting. Disabled by default for backward compatibility."""
+
+    enabled: bool = False
+    keyframe_weight_column: str = "annotation.keyframe_weight"
+    gripper_event_column: str = "annotation.gripper_event"
+    use_timestep_weight: bool = True
+    use_action_dim_weight: bool = True
+    gripper_dim_indices: list[int] | None = None
+    infer_gripper_dim_from_feature_names: bool = True
+    gripper_dim_weight: float = 2.0
+    max_weight: float = 10.0
+    normalize_weighted_loss: bool = True
+    apply_to_pose_dims: bool = True
+    pose_keyframe_weight_scale: float = 1.0
+    apply_to_gripper_dims: bool = True
+    gripper_keyframe_weight_scale: float = 1.0
+    log_weighted_loss_breakdown: bool = True
+
+
 @PreTrainedConfig.register_subclass("act")
 @dataclass
 class ACTConfig(PreTrainedConfig):
@@ -131,6 +152,7 @@ class ACTConfig(PreTrainedConfig):
     # Training and loss computation.
     dropout: float = 0.1
     kl_weight: float = 10.0
+    loss_weighting: ACTLossWeightingConfig = field(default_factory=ACTLossWeightingConfig)
 
     # Training preset
     optimizer_lr: float = 1e-5
@@ -139,6 +161,9 @@ class ACTConfig(PreTrainedConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if isinstance(self.loss_weighting, dict):
+            self.loss_weighting = ACTLossWeightingConfig(**self.loss_weighting)
 
         """Input validation (not exhaustive)."""
         if not self.vision_backbone.startswith("resnet"):
@@ -159,6 +184,10 @@ class ACTConfig(PreTrainedConfig):
             raise ValueError(
                 f"Multiple observation steps not handled yet. Got `nobs_steps={self.n_obs_steps}`"
             )
+        if self.loss_weighting.max_weight <= 0:
+            raise ValueError("`loss_weighting.max_weight` must be > 0.")
+        if self.loss_weighting.gripper_dim_weight < 0:
+            raise ValueError("`loss_weighting.gripper_dim_weight` must be >= 0.")
 
     def get_optimizer_preset(self) -> AdamWConfig:
         return AdamWConfig(
