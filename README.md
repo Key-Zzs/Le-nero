@@ -328,7 +328,7 @@ Common key controls during collection:
 - [x] Phase 4: Add disabled-by-default Diffusion Policy weighted denoising loss
 - [x] Phase 5: Optional keyframe-aware sampler
 - [x] Phase 6: Metrics, debugging, and visualization
-- [ ] Phase 7: Tests and regression safety
+- [x] Phase 7: Tests and regression safety
 - [ ] Phase 8: Training and rollout validation
 
 #### Notes
@@ -337,3 +337,16 @@ Common key controls during collection:
 - Annotation export must never mutate the source dataset; new fields belong only in an explicit output copy.
 - Phase 4 keeps Diffusion Policy weighted loss disabled by default; scheduler, noise sampling, and inference remain unchanged.
 - Phase 5 keeps keyframe-aware sampling disabled by default and preserves DP episode-aware sample eligibility when enabled.
+
+#### Regression commands
+
+```bash
+conda run -n dual_arm_data python -m pytest \
+  dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_gripper_transition_hysteresis.py \
+  dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_annotation_batch_propagation.py \
+  dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_act_weighted_loss.py \
+  dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_diffusion_weighted_loss.py \
+  dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_keyframe_sampler.py \
+  dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_keyframe_metrics_logging.py \
+  dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_keyframe_regression_safety.py
+```

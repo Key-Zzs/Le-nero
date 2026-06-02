@@ -332,7 +332,7 @@ robot-dagger --config scripts/config/dagger_rounds_cfg.yaml
 - [x] Phase 4：添加默认关闭的 Diffusion Policy 加权去噪 loss
 - [x] Phase 5：可选关键帧感知采样器
 - [x] Phase 6：指标、调试与可视化
-- [ ] Phase 7：测试与回归安全
+- [x] Phase 7：测试与回归安全
 - [ ] Phase 8：训练与真机验证
 
 #### 备注
@@ -341,3 +341,16 @@ robot-dagger --config scripts/config/dagger_rounds_cfg.yaml
 - annotation 导出不能修改原始 dataset；新增字段只应写入显式指定的新 dataset copy。
 - Phase 4 已加入默认关闭的 Diffusion Policy 加权 loss；scheduler、noise sampling 和推理保持不变。
 - Phase 5 的关键帧感知采样器默认关闭；启用时会保留 DP 的 episode-aware 合法采样范围。
+
+#### 回归测试命令
+
+```bash
+conda run -n dual_arm_data python -m pytest \
+  dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_gripper_transition_hysteresis.py \
+  dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_annotation_batch_propagation.py \
+  dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_act_weighted_loss.py \
+  dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_diffusion_weighted_loss.py \
+  dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_keyframe_sampler.py \
+  dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_keyframe_metrics_logging.py \
+  dual_arm_data_collection/lerobot_dual_arm_teleop/tests/test_keyframe_regression_safety.py
+```

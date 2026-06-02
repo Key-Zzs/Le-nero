@@ -259,6 +259,14 @@ def _add_metric(metrics: dict[str, Tensor], key: str, value: Tensor | None) -> N
         metrics[key] = value.detach()
 
 
+def _metric_to_scalar(value):
+    if isinstance(value, Tensor):
+        return value.detach().item()
+    if hasattr(value, "item"):
+        return value.item()
+    return value
+
+
 def _get_event_tensor(
     batch: dict[str, Tensor],
     key: str,
@@ -536,7 +544,11 @@ class DiffusionPolicy(PreTrainedPolicy):
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch[OBS_IMAGES] = torch.stack([batch[key] for key in self.config.image_features], dim=-4)
         loss, loss_breakdown = self.diffusion.compute_loss_and_metrics(batch)
-        loss_dict = {key: value.item() for key, value in loss_breakdown.items()} if loss_breakdown else None
+        loss_dict = (
+            {key: _metric_to_scalar(value) for key, value in loss_breakdown.items()}
+            if loss_breakdown
+            else None
+        )
         return loss, loss_dict
 
 
@@ -757,7 +769,7 @@ class DiffusionModel(nn.Module):
                 self.config,
                 action_dim_names=getattr(self.config, "_action_feature_names", None),
             )
-            loss_dict = {key: value.detach().item() for key, value in loss_breakdown.items()}
+            loss_dict = {key: _metric_to_scalar(value) for key, value in loss_breakdown.items()}
             weighted_mse = loss.detach().item()
             loss_dict.setdefault("loss/denoising_mse_weighted", weighted_mse)
             loss_dict.setdefault("loss/dp_denoising_mse_weighted", weighted_mse)
