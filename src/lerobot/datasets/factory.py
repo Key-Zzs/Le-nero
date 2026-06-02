@@ -34,6 +34,34 @@ IMAGENET_STATS = {
     "std": [[[0.229]], [[0.224]], [[0.225]]],  # (c,1,1)
 }
 
+ACTION_ALIGNED_ANNOTATION_KEYS = (
+    "annotation.keyframe_weight",
+    "annotation.gripper_event",
+    "annotation.left_keyframe_weight",
+    "annotation.right_keyframe_weight",
+    "annotation.left_gripper_event",
+    "annotation.right_gripper_event",
+)
+
+
+def add_annotation_delta_timestamps(
+    delta_timestamps: dict[str, list[float]] | None,
+    cfg: PreTrainedConfig,
+    ds_meta: LeRobotDatasetMetadata,
+) -> dict[str, list[float]] | None:
+    """Add action-aligned temporal queries for gripper annotation supervision fields."""
+    if cfg.action_delta_indices is None:
+        return delta_timestamps
+
+    updated_delta_timestamps = dict(delta_timestamps or {})
+    action_delta_timestamps = [i / ds_meta.fps for i in cfg.action_delta_indices]
+
+    for key in ACTION_ALIGNED_ANNOTATION_KEYS:
+        if key in ds_meta.features and key not in updated_delta_timestamps:
+            updated_delta_timestamps[key] = action_delta_timestamps
+
+    return updated_delta_timestamps or None
+
 
 def resolve_delta_timestamps(
     cfg: PreTrainedConfig, ds_meta: LeRobotDatasetMetadata
@@ -62,10 +90,7 @@ def resolve_delta_timestamps(
         if key.startswith(OBS_PREFIX) and cfg.observation_delta_indices is not None:
             delta_timestamps[key] = [i / ds_meta.fps for i in cfg.observation_delta_indices]
 
-    if len(delta_timestamps) == 0:
-        delta_timestamps = None
-
-    return delta_timestamps
+    return add_annotation_delta_timestamps(delta_timestamps or None, cfg, ds_meta)
 
 
 def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDataset:

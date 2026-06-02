@@ -20,6 +20,7 @@ TODO(alexander-soare):
   - Remove reliance on diffusers for DDPMScheduler and LR scheduler.
 """
 
+import logging
 import math
 from collections import deque
 from collections.abc import Callable
@@ -42,6 +43,406 @@ from lerobot.policies.utils import (
     populate_queues,
 )
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
+
+GRIPPER_ACTION_DIM_NAMES = {
+    "left_gripper_cmd",
+    "right_gripper_cmd",
+    "left_gripper_cmd_bin",
+    "right_gripper_cmd_bin",
+    "left_gripper",
+    "right_gripper",
+    "gripper",
+}
+
+_LOSS_WEIGHTING_WARNINGS: set[str] = set()
+
+logger = logging.getLogger(__name__)
+
+
+def _warn_loss_weighting_once(message: str) -> None:
+    if message in _LOSS_WEIGHTING_WARNINGS:
+        return
+    _LOSS_WEIGHTING_WARNINGS.add(message)
+    logger.warning("Diffusion loss_weighting: %s", message)
+
+
+def infer_gripper_dim_indices(
+    action_dim: int,
+    *,
+    explicit_indices: list[int] | None = None,
+    action_dim_names: list[str] | tuple[str, ...] | None = None,
+) -> list[int]:
+    """Resolve gripper action dimensions from explicit config or action feature names."""
+    if explicit_indices is not None:
+        resolved = []
+        for index in explicit_indices:
+            index = int(index)
+            if 0 <= index < action_dim and index not in resolved:
+                resolved.append(index)
+            else:
+                _warn_loss_weighting_once(
+                    f"ignoring invalid gripper_dim_indices entry {index} for action_dim={action_dim}"
+                )
+        return resolved
+
+    if action_dim_names is None:
+        return []
+    if len(action_dim_names) != action_dim:
+        _warn_loss_weighting_once(
+            "cannot infer gripper dims because action feature names length "
+            f"({len(action_dim_names)}) does not match action_dim ({action_dim})"
+        )
+        return []
+
+    resolved = []
+    for index, name in enumerate(action_dim_names):
+        normalized_name = str(name).strip().lower()
+        leaf_name = normalized_name.rsplit(".", maxsplit=1)[-1].rsplit("/", maxsplit=1)[-1]
+        if normalized_name in GRIPPER_ACTION_DIM_NAMES or leaf_name in GRIPPER_ACTION_DIM_NAMES:
+            resolved.append(index)
+    return resolved
+
+
+def compute_unweighted_denoising_mse_loss(
+    pred: Tensor,
+    target: Tensor,
+    action_is_pad: Tensor | None,
+    config: DiffusionConfig,
+) -> Tensor:
+    """Original Diffusion denoising MSE, preserving the final mean denominator exactly."""
+    mse_per_dim = F.mse_loss(pred, target, reduction="none")
+    if config.do_mask_loss_for_padding:
+        if action_is_pad is None:
+            raise ValueError(
+                "You need to provide 'action_is_pad' in the batch when "
+                f"{config.do_mask_loss_for_padding=}."
+            )
+        if tuple(action_is_pad.shape) != tuple(pred.shape[:2]):
+            raise ValueError(
+                "action_is_pad must have shape [B, H]. "
+                f"Got {tuple(action_is_pad.shape)}, expected {tuple(pred.shape[:2])}."
+            )
+        mse_per_dim = mse_per_dim * (~action_is_pad.to(device=pred.device, dtype=torch.bool)).unsqueeze(-1)
+    return mse_per_dim.mean()
+
+
+def _get_horizon_weight(
+    batch: dict[str, Tensor],
+    key: str,
+    *,
+    shape: tuple[int, int],
+    like: Tensor,
+    max_weight: float,
+) -> Tensor:
+    raw_weight = batch.get(key)
+    if raw_weight is None:
+        _warn_loss_weighting_once(f"missing '{key}', falling back to horizon weight 1")
+        return torch.ones((*shape, 1), dtype=like.dtype, device=like.device)
+    if not isinstance(raw_weight, Tensor):
+        _warn_loss_weighting_once(f"'{key}' is not a tensor, falling back to horizon weight 1")
+        return torch.ones((*shape, 1), dtype=like.dtype, device=like.device)
+
+    weight = raw_weight.to(device=like.device, dtype=like.dtype)
+    if weight.ndim == 3 and weight.shape[-1] == 1:
+        weight = weight.squeeze(-1)
+    if tuple(weight.shape) != shape:
+        _warn_loss_weighting_once(
+            f"'{key}' has shape {tuple(weight.shape)}, expected {shape}; falling back to horizon weight 1"
+        )
+        return torch.ones((*shape, 1), dtype=like.dtype, device=like.device)
+
+    weight = torch.nan_to_num(weight, nan=1.0, posinf=max_weight, neginf=1.0)
+    return weight.clamp(min=0.0, max=max_weight).unsqueeze(-1)
+
+
+def _scale_horizon_weight(horizon_weight: Tensor, scale: float, max_weight: float) -> Tensor:
+    scaled = 1.0 + (horizon_weight - 1.0) * float(scale)
+    return scaled.clamp(min=0.0, max=max_weight)
+
+
+def _build_horizon_dim_weight(
+    horizon_weight: Tensor,
+    *,
+    action_dim: int,
+    gripper_dim_indices: list[int],
+    config: DiffusionConfig,
+) -> Tensor:
+    weighting_cfg = config.loss_weighting
+    if not weighting_cfg.use_horizon_weight:
+        return torch.ones(
+            (*horizon_weight.shape[:2], action_dim),
+            dtype=horizon_weight.dtype,
+            device=horizon_weight.device,
+        )
+
+    weight = torch.ones(
+        (*horizon_weight.shape[:2], action_dim),
+        dtype=horizon_weight.dtype,
+        device=horizon_weight.device,
+    )
+    gripper_mask = torch.zeros(action_dim, dtype=torch.bool, device=horizon_weight.device)
+    if gripper_dim_indices:
+        gripper_mask[gripper_dim_indices] = True
+    pose_mask = ~gripper_mask
+
+    if weighting_cfg.apply_to_pose_dims and pose_mask.any():
+        weight[..., pose_mask] = _scale_horizon_weight(
+            horizon_weight,
+            weighting_cfg.pose_keyframe_weight_scale,
+            weighting_cfg.max_weight,
+        )
+    if weighting_cfg.apply_to_gripper_dims and gripper_mask.any():
+        weight[..., gripper_mask] = _scale_horizon_weight(
+            horizon_weight,
+            weighting_cfg.gripper_keyframe_weight_scale,
+            weighting_cfg.max_weight,
+        )
+    return weight
+
+
+def _build_action_dim_weight(
+    action_dim: int,
+    *,
+    gripper_dim_indices: list[int],
+    like: Tensor,
+    config: DiffusionConfig,
+) -> Tensor:
+    weighting_cfg = config.loss_weighting
+    action_dim_weight = torch.ones((1, 1, action_dim), dtype=like.dtype, device=like.device)
+    if weighting_cfg.use_action_dim_weight and gripper_dim_indices:
+        action_dim_weight[..., gripper_dim_indices] = float(weighting_cfg.gripper_dim_weight)
+    return torch.nan_to_num(
+        action_dim_weight,
+        nan=1.0,
+        posinf=weighting_cfg.max_weight,
+        neginf=1.0,
+    ).clamp(min=0.0, max=weighting_cfg.max_weight)
+
+
+def _build_valid_mask(
+    action_is_pad: Tensor | None,
+    *,
+    shape: tuple[int, int],
+    like: Tensor,
+    config: DiffusionConfig,
+) -> Tensor:
+    if not config.do_mask_loss_for_padding:
+        return torch.ones((*shape, 1), dtype=like.dtype, device=like.device)
+    if action_is_pad is None:
+        raise ValueError(
+            "You need to provide 'action_is_pad' in the batch when "
+            f"{config.do_mask_loss_for_padding=}."
+        )
+    if tuple(action_is_pad.shape) != shape:
+        raise ValueError(
+            "action_is_pad must have shape [B, H]. "
+            f"Got {tuple(action_is_pad.shape)}, expected {shape}."
+        )
+    valid_mask = (~action_is_pad.to(device=like.device, dtype=torch.bool)).unsqueeze(-1)
+    return valid_mask.to(dtype=like.dtype)
+
+
+def _masked_mean(value: Tensor, mask: Tensor) -> Tensor | None:
+    mask = mask.to(dtype=value.dtype, device=value.device)
+    while mask.ndim < value.ndim:
+        mask = mask.unsqueeze(-1)
+    if mask.shape != value.shape:
+        mask = mask.expand_as(value)
+    denominator = mask.sum()
+    if denominator <= 0:
+        return None
+    return (value * mask).sum() / denominator.clamp_min(1e-6)
+
+
+def _add_metric(metrics: dict[str, Tensor], key: str, value: Tensor | None) -> None:
+    if value is not None:
+        metrics[key] = value.detach()
+
+
+def _metric_to_scalar(value):
+    if isinstance(value, Tensor):
+        return value.detach().item()
+    if hasattr(value, "item"):
+        return value.item()
+    return value
+
+
+def _get_event_tensor(
+    batch: dict[str, Tensor],
+    key: str,
+    *,
+    shape: tuple[int, int],
+    device: torch.device,
+) -> Tensor | None:
+    event = batch.get(key)
+    if event is None or not isinstance(event, Tensor):
+        return None
+    event = event.to(device=device)
+    if event.ndim == 3 and event.shape[-1] == 1:
+        event = event.squeeze(-1)
+    if tuple(event.shape) != shape:
+        _warn_loss_weighting_once(
+            f"'{key}' has shape {tuple(event.shape)}, expected {shape}; skipping event breakdown"
+        )
+        return None
+    return event.to(dtype=torch.long)
+
+
+def compute_weighted_denoising_mse_loss(
+    pred: Tensor,
+    target: Tensor,
+    action_is_pad: Tensor | None,
+    batch: dict[str, Tensor],
+    config: DiffusionConfig,
+    action_dim_names: list[str] | tuple[str, ...] | None = None,
+) -> tuple[Tensor, dict[str, Tensor]]:
+    """Compute enabled Diffusion weighted denoising MSE and detached logging metrics."""
+    if pred.shape != target.shape or pred.ndim != 3:
+        raise ValueError(
+            "pred and target must have matching [B, H, D] shapes. "
+            f"Got {tuple(pred.shape)} and {tuple(target.shape)}."
+        )
+
+    batch_size, horizon, action_dim = pred.shape
+    weighting_cfg = config.loss_weighting
+    mse_per_dim = F.mse_loss(pred, target, reduction="none")
+
+    valid_mask = _build_valid_mask(
+        action_is_pad,
+        shape=(batch_size, horizon),
+        like=mse_per_dim,
+        config=config,
+    )
+
+    # This is an action-horizon step weight [B, H, 1], not a diffusion scheduler timestep weight [B].
+    if weighting_cfg.use_horizon_weight:
+        horizon_weight = _get_horizon_weight(
+            batch,
+            weighting_cfg.keyframe_weight_column,
+            shape=(batch_size, horizon),
+            like=mse_per_dim,
+            max_weight=weighting_cfg.max_weight,
+        )
+    else:
+        horizon_weight = torch.ones((batch_size, horizon, 1), dtype=mse_per_dim.dtype, device=mse_per_dim.device)
+
+    gripper_dim_indices = []
+    needs_gripper_dims = (
+        weighting_cfg.use_action_dim_weight
+        or weighting_cfg.log_weighted_loss_breakdown
+        or (
+            weighting_cfg.use_horizon_weight
+            and (
+                weighting_cfg.apply_to_pose_dims != weighting_cfg.apply_to_gripper_dims
+                or weighting_cfg.pose_keyframe_weight_scale != weighting_cfg.gripper_keyframe_weight_scale
+            )
+        )
+    )
+    if needs_gripper_dims:
+        names = action_dim_names if weighting_cfg.infer_gripper_dim_from_feature_names else None
+        gripper_dim_indices = infer_gripper_dim_indices(
+            action_dim,
+            explicit_indices=weighting_cfg.gripper_dim_indices,
+            action_dim_names=names,
+        )
+        if weighting_cfg.use_action_dim_weight and not gripper_dim_indices:
+            _warn_loss_weighting_once(
+                "could not resolve gripper action dims; using horizon weights without gripper dim weight"
+            )
+
+    horizon_dim_weight = _build_horizon_dim_weight(
+        horizon_weight,
+        action_dim=action_dim,
+        gripper_dim_indices=gripper_dim_indices,
+        config=config,
+    )
+    action_dim_weight = _build_action_dim_weight(
+        action_dim,
+        gripper_dim_indices=gripper_dim_indices,
+        like=mse_per_dim,
+        config=config,
+    )
+
+    effective_weight = valid_mask * horizon_dim_weight * action_dim_weight
+    weighted_mse = mse_per_dim * effective_weight
+    if weighting_cfg.normalize_weighted_loss:
+        denominator = effective_weight.sum().clamp_min(1e-6)
+    else:
+        denominator = torch.tensor(mse_per_dim.numel(), dtype=mse_per_dim.dtype, device=mse_per_dim.device)
+    loss = weighted_mse.sum() / denominator
+
+    metrics: dict[str, Tensor] = {}
+    if not weighting_cfg.log_weighted_loss_breakdown:
+        return loss, metrics
+
+    with torch.no_grad():
+        valid_horizon_mask = valid_mask.squeeze(-1) > 0
+        valid_dim_mask = valid_mask.expand_as(mse_per_dim) > 0
+        keyframe_mask = (horizon_weight.squeeze(-1) > 1.0) & valid_horizon_mask
+        normal_mask = (horizon_weight.squeeze(-1) <= 1.0) & valid_horizon_mask
+
+        denoising_mse_unweighted = _masked_mean(mse_per_dim, valid_dim_mask)
+        _add_metric(metrics, "loss/denoising_mse_unweighted", denoising_mse_unweighted)
+        _add_metric(metrics, "loss/dp_denoising_mse_unweighted", denoising_mse_unweighted)
+        metrics["loss/denoising_mse_weighted"] = loss.detach()
+        metrics["loss/dp_denoising_mse_weighted"] = loss.detach()
+        keyframe_mse = _masked_mean(mse_per_dim, keyframe_mask)
+        normal_mse = _masked_mean(mse_per_dim, normal_mask)
+        _add_metric(metrics, "loss/keyframe_mse", keyframe_mse)
+        _add_metric(metrics, "loss/dp_keyframe_mse", keyframe_mse)
+        _add_metric(metrics, "loss/normal_mse", normal_mse)
+        _add_metric(metrics, "loss/dp_normal_mse", normal_mse)
+        valid_horizon_count = valid_horizon_mask.to(dtype=mse_per_dim.dtype).sum().clamp_min(1e-6)
+        metrics["loss/keyframe_ratio"] = (
+            keyframe_mask.to(dtype=mse_per_dim.dtype).sum() / valid_horizon_count
+        ).detach()
+        metrics["loss/normal_ratio"] = (
+            normal_mask.to(dtype=mse_per_dim.dtype).sum() / valid_horizon_count
+        ).detach()
+        mean_annotation_weight = _masked_mean(horizon_weight, valid_horizon_mask)
+        max_annotation_weight = horizon_weight[valid_horizon_mask].max() if valid_horizon_mask.any() else None
+        _add_metric(metrics, "loss/mean_horizon_weight", mean_annotation_weight)
+        _add_metric(
+            metrics,
+            "loss/max_horizon_weight",
+            max_annotation_weight,
+        )
+        _add_metric(metrics, "loss/mean_annotation_weight", mean_annotation_weight)
+        _add_metric(metrics, "loss/max_annotation_weight", max_annotation_weight)
+        _add_metric(metrics, "loss/mean_effective_weight", _masked_mean(effective_weight, valid_dim_mask))
+        _add_metric(
+            metrics,
+            "loss/max_effective_weight",
+            effective_weight[valid_dim_mask].max() if valid_dim_mask.any() else None,
+        )
+
+        gripper_dim_mask = torch.zeros(action_dim, dtype=torch.bool, device=mse_per_dim.device)
+        if gripper_dim_indices:
+            gripper_dim_mask[gripper_dim_indices] = True
+            gripper_mse = _masked_mean(mse_per_dim, valid_dim_mask & gripper_dim_mask)
+            _add_metric(metrics, "loss/gripper_mse", gripper_mse)
+            _add_metric(metrics, "loss/dp_gripper_mse", gripper_mse)
+        pose_dim_mask = ~gripper_dim_mask
+        if pose_dim_mask.any():
+            pose_mse = _masked_mean(mse_per_dim, valid_dim_mask & pose_dim_mask)
+            _add_metric(metrics, "loss/pose_mse", pose_mse)
+            _add_metric(metrics, "loss/dp_pose_mse", pose_mse)
+
+        event = _get_event_tensor(
+            batch,
+            weighting_cfg.gripper_event_column,
+            shape=(batch_size, horizon),
+            device=mse_per_dim.device,
+        )
+        if event is not None:
+            closing_mse = _masked_mean(mse_per_dim, (event == 2) & valid_horizon_mask)
+            opening_mse = _masked_mean(mse_per_dim, (event == 5) & valid_horizon_mask)
+            _add_metric(metrics, "loss/closing_mse", closing_mse)
+            _add_metric(metrics, "loss/dp_closing_mse", closing_mse)
+            _add_metric(metrics, "loss/opening_mse", opening_mse)
+            _add_metric(metrics, "loss/dp_opening_mse", opening_mse)
+
+    return loss, metrics
 
 
 class DiffusionPolicy(PreTrainedPolicy):
@@ -142,9 +543,13 @@ class DiffusionPolicy(PreTrainedPolicy):
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
             batch[OBS_IMAGES] = torch.stack([batch[key] for key in self.config.image_features], dim=-4)
-        loss = self.diffusion.compute_loss(batch)
-        # no output_dict so returning None
-        return loss, None
+        loss, loss_breakdown = self.diffusion.compute_loss_and_metrics(batch)
+        loss_dict = (
+            {key: _metric_to_scalar(value) for key, value in loss_breakdown.items()}
+            if loss_breakdown
+            else None
+        )
+        return loss, loss_dict
 
 
 def _make_noise_scheduler(name: str, **kwargs: dict) -> DDPMScheduler | DDIMScheduler:
@@ -300,6 +705,10 @@ class DiffusionModel(nn.Module):
         return actions
 
     def compute_loss(self, batch: dict[str, Tensor]) -> Tensor:
+        loss, _ = self.compute_loss_and_metrics(batch)
+        return loss
+
+    def compute_loss_and_metrics(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict[str, Tensor]]:
         """
         This function expects `batch` to have (at least):
         {
@@ -310,11 +719,11 @@ class DiffusionModel(nn.Module):
             "observation.environment_state": (B, n_obs_steps, environment_dim)
 
             "action": (B, horizon, action_dim)
-            "action_is_pad": (B, horizon)
+            "action_is_pad": (B, horizon) when do_mask_loss_for_padding is true
         }
         """
         # Input validation.
-        assert set(batch).issuperset({OBS_STATE, ACTION, "action_is_pad"})
+        assert set(batch).issuperset({OBS_STATE, ACTION})
         assert OBS_IMAGES in batch or OBS_ENV_STATE in batch
         n_obs_steps = batch[OBS_STATE].shape[1]
         horizon = batch[ACTION].shape[1]
@@ -350,19 +759,25 @@ class DiffusionModel(nn.Module):
         else:
             raise ValueError(f"Unsupported prediction type {self.config.prediction_type}")
 
-        loss = F.mse_loss(pred, target, reduction="none")
+        action_is_pad = batch.get("action_is_pad")
+        if self.config.loss_weighting.enabled:
+            loss, loss_breakdown = compute_weighted_denoising_mse_loss(
+                pred,
+                target,
+                action_is_pad,
+                batch,
+                self.config,
+                action_dim_names=getattr(self.config, "_action_feature_names", None),
+            )
+            loss_dict = {key: _metric_to_scalar(value) for key, value in loss_breakdown.items()}
+            weighted_mse = loss.detach().item()
+            loss_dict.setdefault("loss/denoising_mse_weighted", weighted_mse)
+            loss_dict.setdefault("loss/dp_denoising_mse_weighted", weighted_mse)
+            loss_dict["loss/total"] = weighted_mse
+            return loss, loss_dict
 
-        # Mask loss wherever the action is padded with copies (edges of the dataset trajectory).
-        if self.config.do_mask_loss_for_padding:
-            if "action_is_pad" not in batch:
-                raise ValueError(
-                    "You need to provide 'action_is_pad' in the batch when "
-                    f"{self.config.do_mask_loss_for_padding=}."
-                )
-            in_episode_bound = ~batch["action_is_pad"]
-            loss = loss * in_episode_bound.unsqueeze(-1)
-
-        return loss.mean()
+        loss = compute_unweighted_denoising_mse_loss(pred, target, action_is_pad, self.config)
+        return loss, {"loss/total": loss.detach().item()}
 
 
 class SpatialSoftmax(nn.Module):

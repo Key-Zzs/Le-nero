@@ -33,6 +33,36 @@ TRAIN_CONFIG_NAME = "train_config.json"
 
 
 @dataclass
+class KeyframeSamplerConfig:
+    """Optional action-window keyframe-aware sampler. Disabled by default."""
+
+    enabled: bool = False
+    annotation_weight_column: str = "annotation.keyframe_weight"
+    annotation_event_column: str = "annotation.gripper_event"
+    positive_if_weight_gt: float = 1.0
+    positive_event_ids: list[int] = field(default_factory=lambda: [2, 5])
+    include_pre_post_events: bool = True
+    positive_sample_weight: float = 3.0
+    normal_sample_weight: float = 1.0
+    max_sample_weight: float = 4.0
+    require_annotation: bool = False
+    seed: int = 0
+    log_sampler_stats: bool = True
+
+
+@dataclass
+class DebugMetricsConfig:
+    """Lightweight training-time annotation and sampler debug reports."""
+
+    enabled: bool = True
+    write_annotation_summary_json: bool = True
+    write_sampler_summary_json: bool = True
+    write_batch_metrics_preview: bool = False
+    max_preview_batches: int = 5
+    plot_annotation_distribution: bool = False
+
+
+@dataclass
 class TrainPipelineConfig(HubMixin):
     dataset: DatasetConfig
     env: envs.EnvConfig | None = None
@@ -52,6 +82,8 @@ class TrainPipelineConfig(HubMixin):
     # Number of workers for the dataloader.
     num_workers: int = 4
     batch_size: int = 8
+    keyframe_sampler: KeyframeSamplerConfig = field(default_factory=KeyframeSamplerConfig)
+    debug_metrics: DebugMetricsConfig = field(default_factory=DebugMetricsConfig)
     steps: int = 100_000
     eval_freq: int = 20_000
     log_freq: int = 200
@@ -65,6 +97,10 @@ class TrainPipelineConfig(HubMixin):
     wandb: WandBConfig = field(default_factory=WandBConfig)
 
     def __post_init__(self):
+        if isinstance(self.keyframe_sampler, dict):
+            self.keyframe_sampler = KeyframeSamplerConfig(**self.keyframe_sampler)
+        if isinstance(self.debug_metrics, dict):
+            self.debug_metrics = DebugMetricsConfig(**self.debug_metrics)
         self.checkpoint_path = None
 
     def validate(self):
