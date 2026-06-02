@@ -87,6 +87,12 @@ On the first USB connection, allow USB debugging in the headset. For wireless co
 
 ## Core Modules and Runtime Flow
 
+### Project Architecture
+
+<p align="center">
+  <img src="media/le_nero_project_architecture.png" alt="Le-nero project architecture" width="900">
+</p>
+
 The runtime flow can be understood as:
 
 ```text

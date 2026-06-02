@@ -91,6 +91,12 @@ adb devices
 
 ## 核心模块与调用机理
 
+### 项目架构图
+
+<p align="center">
+  <img src="media/le_nero_project_architecture.png" alt="Le-nero 项目架构" width="900">
+</p>
+
 仓库的运行链路可以简化理解为：
 
 ```text
