@@ -159,10 +159,10 @@ create_robot(robot_type, robot_config)
 硬件相关参数不建议直接写在运行脚本里，而是放在：
 
 ```text
-dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/DAS_config
+dual_arm_data_collection/lerobot_dual_arm_teleop/scripts/config/DAQ_config
 ```
 
-例如 `nero_cofig.yaml` 定义 Nero 的机器人 IP、端口、夹爪参数、Oculus 映射和相机序列号。`run_record.py`、`run_replay.py`、`reset_robot.py` 会根据 `record.robot_type` 自动加载对应 DAS 配置；也可以在 `record_cfg.yaml` 中通过 `das_config_path` 显式指定。
+例如 `nero_teleop.yaml` 定义 Nero 的数据采集配置，包括机器人 IP、端口、夹爪参数、Oculus 映射和相机序列号。`run_record.py`、`run_replay.py`、`reset_robot.py` 会根据 `record.robot_type` 自动加载对应 DAQ（Data Acquisition）配置；也可以在 `record_cfg.yaml` 中通过 `daq_config_path` 显式指定。
 
 ### 工具脚本、数采系统与策略配置
 
@@ -177,7 +177,7 @@ dual_arm_data_collection/lerobot_dual_arm_teleop/scripts
 - `scripts/core`：命令入口实现，包括采集、回放、可视化、重置、训练、DAgger。
 - `scripts/config`：主流程配置，包含 `record_cfg.yaml`、`train_cfg.yaml`、`dagger_rounds_cfg.yaml`。
 - `scripts/config/policy_config`：策略超参数配置，区分 train 和 reason 两类。
-- `scripts/config/DAS_config`：硬件和遥操作细节配置。
+- `scripts/config/DAQ_config`：数据采集、硬件和遥操作细节配置。
 - `scripts/tools`：数据集检查、RealSense 设备检查、数据集修补和重命名等工具。
 
 核心配置文件：
@@ -217,6 +217,9 @@ pip install -e .
 | `tools-check-dataset` | 检查本地 LeRobot 数据集信息 | 命令参数 |
 | `tools-check-dagger-dataset` | 检查导出的 DAgger 数据集 | 命令参数 |
 | `tools-check-rs` | 查看 RealSense 设备序列号 | 无 |
+| `tools-preprocess-dataset` | 预处理 LeRobot 数据集，支持静止片段裁剪、动作平滑等 | `scripts/config/preprocess_dataset_cfg.yaml` |
+| `tools-split-label-dataset` | 将长 episode 切分为子 episode，并生成/写入语义标签 | `scripts/config/split_label_dataset_cfg.yaml` |
+| `tools-merge-datasets` | 合并本地 LeRobot 数据集或任务标签 | 命令参数 |
 | `robot-help` | 打印命令摘要 | 无 |
 
 所有核心命令都支持显式传入配置文件，推荐调试时总是写明路径：
@@ -231,6 +234,27 @@ robot-dagger --config scripts/config/dagger_rounds_cfg.yaml
 robot-dagger-export --config scripts/config/dagger_rounds_cfg.yaml
 ```
 
+常用工具命令示例：
+
+```bash
+# 预处理数据集；第一次运行建议先 dry-run 检查输出规模
+tools-preprocess-dataset --config scripts/config/preprocess_dataset_cfg.yaml --dry-run
+tools-preprocess-dataset --config scripts/config/preprocess_dataset_cfg.yaml --overwrite
+
+# 切分长 episode 并生成语义标签；需要写出数据集时加 --write-dataset
+tools-split-label-dataset --config scripts/config/split_label_dataset_cfg.yaml --dry-run
+tools-split-label-dataset --config scripts/config/split_label_dataset_cfg.yaml --write-dataset --overwrite
+
+# 合并任务标签；先 dry-run 预览会修改哪些元数据
+tools-merge-datasets --dataset-root /path/to/dataset \
+  --source-task "source task prompt" \
+  --target-task "target task prompt" \
+  --dry-run
+
+# 查看所有已注册命令
+robot-help
+```
+
 采集前通常需要修改 `scripts/config/record_cfg.yaml`：
 
 - `record.repo_id`：数据集名称，建议使用 `<robot_task<num>_step<num>/<description>`，例如 `nero_task3_step1/2mL_empty_right`。
@@ -241,7 +265,7 @@ robot-dagger-export --config scripts/config/dagger_rounds_cfg.yaml
 - `record.time`：episode 最大时长、reset 时长和 metadata 保存周期。
 - `replay`、`visualize`：回放和可视化默认使用的数据集和 episode。
 
-硬件参数通常在 `scripts/config/DAS_config/*.yaml` 中修改：
+硬件和数据采集参数通常在 `scripts/config/DAQ_config/*.yaml` 中修改：
 
 - `teleop.oculus_config.ip`：Oculus Quest IP。
 - `teleop.oculus_config.*_pose_scaler` 和 `*_channel_signs`：左右手柄到机器人动作的映射。
@@ -296,7 +320,7 @@ DAgger 前通常需要修改 `scripts/config/dagger_rounds_cfg.yaml`：
 ```bash
 cd Le-nero/dual_arm_data_collection/lerobot_dual_arm_teleop
 
-# 1. 查看相机序列号，填入 scripts/config/DAS_config/*.yaml
+# 1. 查看相机序列号，填入 scripts/config/DAQ_config/*.yaml
 tools-check-rs
 
 # 2. 检查策略配置能否正常解析，run_policy/run_mix 前推荐执行
