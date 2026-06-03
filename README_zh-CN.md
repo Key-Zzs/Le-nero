@@ -217,9 +217,11 @@ pip install -e .
 | `tools-check-dataset` | 检查本地 LeRobot 数据集信息 | 命令参数 |
 | `tools-check-dagger-dataset` | 检查导出的 DAgger 数据集 | 命令参数 |
 | `tools-check-rs` | 查看 RealSense 设备序列号 | 无 |
-| `tools-preprocess-dataset` | 预处理 LeRobot 数据集，支持静止片段裁剪、动作平滑等 | `scripts/config/preprocess_dataset_cfg.yaml` |
-| `tools-split-label-dataset` | 将长 episode 切分为子 episode，并生成/写入语义标签 | `scripts/config/split_label_dataset_cfg.yaml` |
+| `tools-preprocess-dataset` | 预处理 LeRobot 数据集，支持静止片段裁剪、动作平滑等 | `scripts/config/dataset_config/preprocess_dataset_cfg.yaml` |
+| `tools-split-label-dataset` | 将长 episode 切分为子 episode，并生成/写入语义标签 | `scripts/config/dataset_config/split_label_dataset_cfg.yaml` |
 | `tools-merge-datasets` | 合并本地 LeRobot 数据集或任务标签 | 命令参数 |
+| `tools-annotate-dataset-phase` | 为数据集副本追加主动手臂 phase 特征 | `scripts/config/dataset_config/annotate_dataset_cfg.yaml` |
+| `tools-annotate-gripper-transition` | 导出夹爪状态转换报告或带标注的数据集副本 | `scripts/config/dataset_config/annotate_dataset_cfg.yaml` |
 | `robot-help` | 打印命令摘要 | 无 |
 
 所有核心命令都支持显式传入配置文件，推荐调试时总是写明路径：
@@ -238,12 +240,22 @@ robot-dagger-export --config scripts/config/dagger_rounds_cfg.yaml
 
 ```bash
 # 预处理数据集；第一次运行建议先 dry-run 检查输出规模
-tools-preprocess-dataset --config scripts/config/preprocess_dataset_cfg.yaml --dry-run
-tools-preprocess-dataset --config scripts/config/preprocess_dataset_cfg.yaml --overwrite
+tools-preprocess-dataset --config scripts/config/dataset_config/preprocess_dataset_cfg.yaml --dry-run
+tools-preprocess-dataset --config scripts/config/dataset_config/preprocess_dataset_cfg.yaml --overwrite
 
 # 切分长 episode 并生成语义标签；需要写出数据集时加 --write-dataset
-tools-split-label-dataset --config scripts/config/split_label_dataset_cfg.yaml --dry-run
-tools-split-label-dataset --config scripts/config/split_label_dataset_cfg.yaml --write-dataset --overwrite
+tools-split-label-dataset --config scripts/config/dataset_config/split_label_dataset_cfg.yaml --dry-run
+tools-split-label-dataset --config scripts/config/dataset_config/split_label_dataset_cfg.yaml --write-dataset --overwrite
+
+# 为数据集添加主动手臂 phase 或夹爪转换标注
+tools-annotate-dataset-phase --config scripts/config/dataset_config/annotate_dataset_cfg.yaml --dry-run
+tools-annotate-gripper-transition --config scripts/config/dataset_config/annotate_dataset_cfg.yaml \
+  --output-mode report_only --output-root /path/to/gripper_transition_reports
+tools-annotate-gripper-transition --config scripts/config/dataset_config/annotate_dataset_cfg.yaml \
+  --output-mode annotated_copy --output-root /path/to/gripper_annotated_dataset --overwrite
+
+# 从 dataset_config 目录读取配置，左右镜像本地数据集
+python scripts/tools/mirror_dataset.py --config scripts/config/dataset_config/mirror_dataset_cfg.yaml --dry-run
 
 # 合并任务标签；先 dry-run 预览会修改哪些元数据
 tools-merge-datasets --dataset-root /path/to/dataset \

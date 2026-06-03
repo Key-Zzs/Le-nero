@@ -213,9 +213,11 @@ Command entry points:
 | `tools-check-dataset` | Inspect local LeRobot dataset information | Command arguments |
 | `tools-check-dagger-dataset` | Inspect an exported DAgger dataset | Command arguments |
 | `tools-check-rs` | Show RealSense device serial numbers | None |
-| `tools-preprocess-dataset` | Preprocess a LeRobot dataset, including static trimming and action smoothing | `scripts/config/preprocess_dataset_cfg.yaml` |
-| `tools-split-label-dataset` | Split long episodes into sub-episodes and generate/write semantic labels | `scripts/config/split_label_dataset_cfg.yaml` |
+| `tools-preprocess-dataset` | Preprocess a LeRobot dataset, including static trimming and action smoothing | `scripts/config/dataset_config/preprocess_dataset_cfg.yaml` |
+| `tools-split-label-dataset` | Split long episodes into sub-episodes and generate/write semantic labels | `scripts/config/dataset_config/split_label_dataset_cfg.yaml` |
 | `tools-merge-datasets` | Merge local LeRobot datasets or task labels | Command arguments |
+| `tools-annotate-dataset-phase` | Append active-arm phase features to a dataset copy | `scripts/config/dataset_config/annotate_dataset_cfg.yaml` |
+| `tools-annotate-gripper-transition` | Export gripper transition reports or an annotated dataset copy | `scripts/config/dataset_config/annotate_dataset_cfg.yaml` |
 | `robot-help` | Print the command summary | None |
 
 All core commands support an explicit config file. It is recommended to pass the path during debugging:
@@ -234,12 +236,22 @@ Common tool command examples:
 
 ```bash
 # Preprocess a dataset; start with dry-run to inspect the planned output size
-tools-preprocess-dataset --config scripts/config/preprocess_dataset_cfg.yaml --dry-run
-tools-preprocess-dataset --config scripts/config/preprocess_dataset_cfg.yaml --overwrite
+tools-preprocess-dataset --config scripts/config/dataset_config/preprocess_dataset_cfg.yaml --dry-run
+tools-preprocess-dataset --config scripts/config/dataset_config/preprocess_dataset_cfg.yaml --overwrite
 
 # Split long episodes and generate semantic labels; add --write-dataset to write output data
-tools-split-label-dataset --config scripts/config/split_label_dataset_cfg.yaml --dry-run
-tools-split-label-dataset --config scripts/config/split_label_dataset_cfg.yaml --write-dataset --overwrite
+tools-split-label-dataset --config scripts/config/dataset_config/split_label_dataset_cfg.yaml --dry-run
+tools-split-label-dataset --config scripts/config/dataset_config/split_label_dataset_cfg.yaml --write-dataset --overwrite
+
+# Annotate datasets with active-arm phase or gripper-transition features
+tools-annotate-dataset-phase --config scripts/config/dataset_config/annotate_dataset_cfg.yaml --dry-run
+tools-annotate-gripper-transition --config scripts/config/dataset_config/annotate_dataset_cfg.yaml \
+  --output-mode report_only --output-root /path/to/gripper_transition_reports
+tools-annotate-gripper-transition --config scripts/config/dataset_config/annotate_dataset_cfg.yaml \
+  --output-mode annotated_copy --output-root /path/to/gripper_annotated_dataset --overwrite
+
+# Mirror a local dataset left/right from the dataset config directory
+python scripts/tools/mirror_dataset.py --config scripts/config/dataset_config/mirror_dataset_cfg.yaml --dry-run
 
 # Merge task labels; dry-run first to preview metadata changes
 tools-merge-datasets --dataset-root /path/to/dataset \
