@@ -242,8 +242,9 @@ Sampling and action output:
 
 ## 9. Implementation Phases
 
-- [ ] Phase 0 - Dependency inspection and legacy backup
-- [ ] Phase 1 - Config skeleton compatible with LeRobot
+- [x] Phase 0 - Dependency inspection and legacy backup
+- [x] Phase 1 - Config skeleton compatible with LeRobot
+  - Status: config skeleton and scoped tests added.
 - [ ] Phase 2 - Processor compatibility
 - [ ] Phase 3 - Minimal image/state/action tensor contract
 - [ ] Phase 4 - SpatialSoftmax from scratch
