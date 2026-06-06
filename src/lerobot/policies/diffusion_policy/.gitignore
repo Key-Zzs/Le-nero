@@ -1,0 +1,52 @@
+# Compiled & Cached Files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.cache/
+.ruff_cache/
+.mypy_cache/
+
+# Environments & Dependencies
+.env
+.venv
+env/
+venv/
+.python-version
+
+# Build & Distribution
+build/
+dist/
+*.egg-info/
+*.egg
+eggs/
+
+# Testing & Coverage
+htmlcov/
+.coverage
+.coverage.*
+.pytest_cache/
+.hypothesis/
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs & Data
+*.log
+data/
+outputs/
+
+# W&B
+wandb/
+
+# agent related
+.codex/
+.claude/
+.agent/

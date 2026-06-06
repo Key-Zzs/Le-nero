@@ -247,7 +247,8 @@ Sampling 和 action 输出：
   - 状态：config skeleton 和 scoped tests 已添加。
 - [x] Phase 2 - Processor 兼容性
   - 状态：processor factory 和测试已添加，完整 pytest 因本地环境问题暂未完成：可用解释器缺少 `pytest` 和 `torch`，`uv run` 在构建 `egl-probe` 时失败。
-- [ ] Phase 3 - 最小 image/state/action tensor contract
+- [x] Phase 3 - 最小 image/state/action tensor contract
+  - 状态：tensor contract 工具函数和测试已添加，完整 pytest 因本地环境问题暂未完成：可用解释器缺少 `pytest`/`torch`/`draccus`，且 `uv run` 仍在构建 `egl-probe` 时失败。
 - [ ] Phase 4 - 从零实现 SpatialSoftmax
 - [ ] Phase 5 - 从零实现 RGB encoder
 - [ ] Phase 6 - Sinusoidal timestep embedding

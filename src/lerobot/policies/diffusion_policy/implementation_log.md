@@ -1335,3 +1335,592 @@ Phase 3 - 最小 image/state/action tensor contract
   - 缺失 image/state/env-state 时应如何报错；
   - processor 输出和未来 model 输入之间的 key/shape 对齐。
 - 如果跳过这个阶段直接写 SpatialSoftmax、RGB encoder 或 U-Net，很容易把 shape 错误藏进模型内部，后续排查成本会高很多。
+
+## Phase 3 - 最小 image/state/action tensor contract
+
+### 1. 本阶段目标
+
+Phase 3 的目标是先固定 Diffusion Policy 进入模型前的最小 tensor contract，而不是开始写模型。
+
+本阶段明确并测试以下几类 shape：
+
+- LeRobot-style training batch。
+- LeRobot-style single-step inference observation。
+- multi-camera image stacking。
+- action target shape。
+- optional `action_is_pad` shape。
+
+具体来说，本阶段把 legacy diffusion policy 中散落在 `forward(batch)`、`select_action(batch)`、`generate_actions(...)`、`compute_loss_and_metrics(...)`、`_prepare_global_conditioning(...)` 里的 shape 假设，抽成独立、显式、可测试的小工具函数。
+
+### 2. 修改文件
+
+本阶段新增：
+
+```text
+src/lerobot/policies/diffusion_policy/tensor_contract.py
+tests/policies/diffusion_policy/test_tensor_contract.py
+```
+
+本阶段更新：
+
+```text
+src/lerobot/policies/diffusion_policy/README.md
+src/lerobot/policies/diffusion_policy/README_zh-CN.md
+src/lerobot/policies/diffusion_policy/implementation_log.md
+```
+
+本阶段没有修改：
+
+```text
+src/lerobot/policies/factory.py
+src/lerobot/policies/__init__.py
+src/lerobot/policies/diffusion/
+src/lerobot/policies/diffusion_legacy/
+training scripts
+dataset code
+robot communication code
+```
+
+### 3. 为什么本阶段仍不实现模型
+
+在实现 SpatialSoftmax、RGB encoder、U-Net、scheduler、loss 之前，必须先固定 batch tensor contract。原因是这些模块都依赖相同的前置 shape 假设：
+
+- state 必须知道是 `[B, n_obs_steps, state_dim]` 还是 `[B, state_dim]`。
+- image 必须知道多相机维度 `N` 放在哪里。
+- action 必须知道训练 target 是 `[B, horizon, action_dim]`。
+- `action_is_pad` 必须知道 mask 的形状是否能和 action 的 batch/time 维度对齐。
+
+如果这些 contract 没有先独立固定，后续模型报错时很难判断问题来自 processor、camera stacking、queue stacking、RGB encoder，还是 U-Net 本身。
+
+所以本阶段只做 tensor contract，不做以下内容：
+
+- `modeling_diffusion_policy.py`
+- SpatialSoftmax
+- RGB encoder
+- U-Net
+- scheduler
+- diffusion loss
+- sampling
+- action queue
+- `select_action`
+- training `forward`
+
+### 4. 新增函数逐个解释
+
+#### `stack_image_features(...)`
+
+函数用途：
+
+- 把多个 camera image feature key 合并到统一的 `observation.images` key。
+- 保持 legacy Diffusion Policy 的 camera stacking 语义。
+- 返回一个新的浅拷贝 batch，避免修改调用者传进来的原始 dict。
+
+输入参数：
+
+- `batch: dict[str, torch.Tensor]`：包含独立 image feature key 的 batch。
+- `image_feature_keys: Iterable[str]`：需要堆叠的 camera key 列表，通常来自 `config.image_features`。
+- `output_key: str = OBS_IMAGES`：输出 key，默认是 `observation.images`。
+
+返回值：
+
+- 返回新的 dict。
+- 原 batch 中已有 tensor object 会被复用。
+- 新 dict 会额外包含 `output_key`。
+
+处理流程：
+
+1. 将 `image_feature_keys` 转成 list，确保至少有一个 key。
+2. 逐个检查 key 是否存在。
+3. 检查每个 image value 都是 `torch.Tensor`。
+4. 检查 image tensor rank 只能是 4 或 5：
+   - rank 5 用于训练：`[B, T, C, H, W]`。
+   - rank 4 用于单步推理：`[B, C, H, W]`。
+5. 检查所有 camera tensor shape 完全一致。
+6. 用 `torch.stack(tensors, dim=-4)` 进行堆叠。
+7. 返回 shallow copy。
+
+training image shape 的变化：
+
+```text
+cam0: [B, T, C, H, W]
+cam1: [B, T, C, H, W]
+
+torch.stack(..., dim=-4)
+
+observation.images: [B, T, N, C, H, W]
+```
+
+其中 `N` 是 camera 数量。
+
+inference image shape 的变化：
+
+```text
+cam0: [B, C, H, W]
+cam1: [B, C, H, W]
+
+torch.stack(..., dim=-4)
+
+observation.images: [B, N, C, H, W]
+```
+
+为什么使用浅拷贝避免修改原 batch：
+
+- legacy `forward` 和 `select_action` 里也会先 `batch = dict(batch)`。
+- 这样只是在新的 dict 上加入 `observation.images`。
+- 调用者原始 batch 不会被追加 key。
+- 这对调试、测试和后续 processor/model 边界都更安全。
+
+为什么要检查 missing key 和 shape mismatch：
+
+- legacy 里直接 list comprehension 取 key，缺 key 时会自然抛异常，但错误上下文不够明确。
+- 多相机 shape 不一致时，`torch.stack` 会报错，但错误信息离 DP contract 太远。
+- 本阶段把这两个错误提前变成明确的 `KeyError` 或 `ValueError`。
+
+与 legacy `torch.stack([batch[key] ...], dim=-4)` 的关系：
+
+- stacking 的 `dim=-4` 完全保持一致。
+- training 和 inference 两种 rank 下产生的 camera 维度位置与 legacy 一致。
+
+与 legacy 的区别：
+
+- legacy 是在 `forward` 和 `select_action` 里临时做隐式 stacking。
+- 本阶段把这段逻辑抽成独立函数，后续 model、policy 和 tests 都可以复用。
+
+#### `validate_training_batch_contract(...)`
+
+函数用途：
+
+- 验证 policy-local image stacking 之后，训练 batch 是否满足未来模型和 loss 的最小输入契约。
+- 这个函数只验证 shape，不计算 loss，不调用模型。
+
+输入参数：
+
+- `batch: dict[str, torch.Tensor]`：post-stacking training batch。
+- `config: DiffusionPolicyConfig`：提供 `n_obs_steps`、`horizon`、feature metadata。
+
+返回值：
+
+- 返回 `None`。
+- 如果 contract 不满足，抛出清晰的 `KeyError` 或 `ValueError`。
+
+检查哪些 key：
+
+- 必须有 `observation.state`。
+- 必须有 `action`。
+- 必须至少有 `observation.images` 或 `observation.environment_state` 一种 conditioning input。
+- 如果存在 `action_is_pad`，则验证它的 shape。
+
+检查哪些 shape：
+
+```text
+observation.state: [B, n_obs_steps, state_dim]
+observation.images: [B, n_obs_steps, num_cameras, C, H, W]
+observation.environment_state: [B, n_obs_steps, env_dim]
+action: [B, horizon, action_dim]
+action_is_pad: [B, horizon]
+```
+
+如何使用 `config.n_obs_steps`：
+
+- 检查 `observation.state.shape[1]`。
+- 如果有 `observation.images`，检查 `observation.images.shape[1]`。
+- 如果有 `observation.environment_state`，检查 `observation.environment_state.shape[1]`。
+
+如何使用 `config.horizon`：
+
+- 检查 `action.shape[1]`。
+- 如果存在 `action_is_pad`，检查 `action_is_pad.shape[1]`。
+
+如何处理 `action_is_pad`：
+
+- 本阶段把 `action_is_pad` 视为 optional key。
+- 如果 key 不存在，不报错。
+- 如果 key 存在，必须是 `[B, horizon]`。
+- 它的 batch size 必须和 state/action 一致。
+
+为什么 training batch 必须有 `ACTION`：
+
+- Diffusion Policy 训练是行为克隆式监督训练。
+- loss 需要真实 action trajectory 作为 denoising target 或 sample target。
+- 没有 `action`，后续 `compute_loss_and_metrics(...)` 无法定义训练目标。
+
+为什么 training batch 必须有 image 或 env-state 至少一种：
+
+- 模型需要 conditioning input。
+- state 是必需的，但 legacy contract 也要求 image 或 env-state 至少一种出现在 batch 中。
+- 这保证未来 `_prepare_global_conditioning(...)` 至少能拼接出有效上下文。
+
+与 legacy `compute_loss_and_metrics(...)` 里的 assert 逻辑关系：
+
+legacy 中的关键检查是：
+
+```python
+assert set(batch).issuperset({OBS_STATE, ACTION})
+assert OBS_IMAGES in batch or OBS_ENV_STATE in batch
+assert horizon == self.config.horizon
+assert n_obs_steps == self.config.n_obs_steps
+```
+
+本阶段保持这些语义，但把 `assert` 改成更明确的异常信息，并补充：
+
+- tensor type 检查。
+- ndim 检查。
+- batch size 一致性检查。
+- action dim 检查。
+- camera 数量检查。
+- image `(C, H, W)` 检查。
+- env-state dim 检查。
+- `action_is_pad` shape 检查。
+
+如果某些测试或临时 config 没有完整 feature metadata，函数会跳过无法安全确定的 feature dim，只保留 rank、batch size、time/horizon 等确定性检查。这一点在代码注释中写明，避免测试为了构造最小 config 而被迫补齐无关 metadata。
+
+#### `validate_single_step_observation_contract(...)`
+
+函数用途：
+
+- 验证单步推理 observation。
+- 这是进入 action queue stacking 之前的形状检查。
+- 不验证 action target。
+
+输入参数：
+
+- `batch: dict[str, torch.Tensor]`：单步 observation batch。
+- `config: DiffusionPolicyConfig`：提供 image feature keys 和可选 feature dims。
+
+返回值：
+
+- 返回 `None`。
+- 如果 contract 不满足，抛出 `KeyError` 或 `ValueError`。
+
+为什么推理单步 observation 不应该要求 `ACTION`：
+
+- 在线推理时只有 observation，没有 ground-truth action。
+- offline eval batch 里可能带着 action，但 legacy `select_action` 会先移除 action。
+- 所以这个函数不要求 action，也不把 action 当作推理输入 contract 的一部分。
+
+为什么 state 是 `[B, state_dim]` 而不是 `[B, T, state_dim]`：
+
+- 这个函数验证的是单个环境 step 的 observation。
+- 历史 `T = n_obs_steps` 维度由后续 queue stacking 产生。
+- 如果这里已经传入 `[B, T, state_dim]`，说明调用边界混淆了单步 observation 和历史 observation。
+
+为什么 image 是 `[B, C, H, W]` 而不是 `[B, T, C, H, W]`：
+
+- 单步推理每个 camera key 对应当前 step 的一张 batch image。
+- 时间维度同样由 queue stacking 后续生成。
+- 本阶段不实现 queue，因此只验证 queue 之前的单步 image。
+
+该函数和后续 `select_action` queue stacking 的关系：
+
+- 后续 `select_action` 会先接收单步 observation。
+- image keys 会先被 stack 成 `[B, N, C, H, W]`。
+- queue 再把连续 step stack 成 `[B, n_obs_steps, N, C, H, W]`。
+- 本函数只负责第一步边界，不负责 action queue。
+
+与 legacy `select_action(...)` 输入逻辑的关系：
+
+- legacy `select_action` 接收单步 observation。
+- 如果 batch 中有 `action`，legacy 会先 pop 掉。
+- 如果有 image features，legacy 会用 `torch.stack(..., dim=-4)` 得到 `[B, N, C, H, W]`。
+- 然后 `populate_queues` 才产生 observation history。
+- 本阶段只把前半段的 shape contract 单独抽出来。
+
+#### `get_image_feature_keys(...)`
+
+函数用途：
+
+- 返回 `config.image_features` 中的 visual input keys。
+
+为什么从 `config.image_features` 取 key：
+
+- `PreTrainedConfig.image_features` 已经是 LeRobot 对 visual feature schema 的标准入口。
+- 不需要在测试或未来 policy 中重复筛选 `FeatureType.VISUAL`。
+
+它如何避免重复访问 config internals：
+
+- 测试可以直接调用 helper 或通过 contract 函数间接使用。
+- 未来 `modeling_diffusion_policy.py` 可以从同一个 helper 取 camera key 顺序。
+- camera stacking 顺序就能和 config feature schema 保持一致。
+
+### 5. 测试文件逐项解释
+
+测试文件：
+
+```text
+tests/policies/diffusion_policy/test_tensor_contract.py
+```
+
+`test_stack_image_features_for_training_batch_uses_legacy_camera_dimension`
+
+- 构造两个 camera key，shape 都是 `[B, T, C, H, W]`。
+- 调用 `stack_image_features(...)`。
+- 验证输出 `observation.images` 是 `[B, T, 2, C, H, W]`。
+- 验证原始 batch 没有被加入 `observation.images`。
+- 防止 training image camera 维度放错位置。
+
+`test_stack_image_features_for_single_step_inference_uses_legacy_camera_dimension`
+
+- 构造两个 single-step camera key，shape 都是 `[B, C, H, W]`。
+- 验证输出是 `[B, 2, C, H, W]`。
+- 防止 inference image 被误当成带时间维度的 training image。
+
+`test_stack_image_features_raises_for_missing_image_key`
+
+- 只提供 `cam0`，但要求 stack `cam0` 和 `cam1`。
+- 验证抛出清晰 `KeyError`。
+- 防止多相机 batch 缺 camera 时错误延迟到模型内部。
+
+`test_stack_image_features_raises_for_mismatched_image_shapes`
+
+- 构造两个 camera tensor，但 `(C, H, W)` 不一致。
+- 验证抛出 `ValueError`。
+- 防止 `torch.stack` 的底层错误成为唯一提示。
+
+`test_validate_training_batch_contract_accepts_valid_image_only_batch`
+
+- 构造包含 state、stacked images、action、`action_is_pad` 的训练 batch。
+- 验证 training contract 通过。
+- 这个测试代表最常见的视觉 DP training batch。
+
+`test_validate_training_batch_contract_accepts_valid_env_state_only_batch`
+
+- 构造没有 image、但有 `observation.environment_state` 的训练 batch。
+- 验证 contract 通过。
+- 防止实现把 DP 强行写成只支持视觉输入。
+
+`test_validate_training_batch_contract_rejects_missing_state`
+
+- 删除 `observation.state`。
+- 验证抛出 `KeyError`。
+- 防止训练 batch 少了必需 robot state。
+
+`test_validate_training_batch_contract_rejects_missing_action`
+
+- 删除 `action`。
+- 验证抛出 `KeyError`。
+- 防止 loss 目标缺失。
+
+`test_validate_training_batch_contract_rejects_missing_images_and_env_state`
+
+- 只保留 state 和 action，不提供 image/env-state。
+- 验证抛出 `ValueError`。
+- 防止 conditioning input 缺失。
+
+`test_validate_training_batch_contract_rejects_wrong_n_obs_steps`
+
+- 把 state 的 time 维改成 `config.n_obs_steps + 1`。
+- 验证错误包含 `n_obs_steps`。
+- 防止 dataset temporal sampling 和 config 不一致。
+
+`test_validate_training_batch_contract_rejects_wrong_horizon`
+
+- 把 action horizon 改成 `config.horizon - 1`。
+- 验证错误包含 `horizon`。
+- 防止 denoising target 长度和模型 horizon 不一致。
+
+`test_validate_training_batch_contract_rejects_wrong_action_is_pad_shape`
+
+- 把 `action_is_pad` 变成 `[B, horizon, 1]`。
+- 验证错误包含 `action_is_pad`。
+- 防止 padding mask 无法和 `[B, horizon, action_dim]` 对齐。
+
+`test_validate_training_batch_contract_rejects_inconsistent_batch_size`
+
+- 让 `observation.images` 的 batch size 不同于 state/action。
+- 验证错误包含 `batch size`。
+- 防止不同 key 来自不同 batch slice 的集成错误。
+
+`test_validate_single_step_observation_contract_accepts_valid_image_observation`
+
+- 构造单步 state `[B, state_dim]` 和两个 camera `[B, C, H, W]`。
+- 验证 single-step inference contract 通过。
+- 这是后续 `select_action` 的输入边界。
+
+`test_validate_single_step_observation_contract_rejects_missing_state`
+
+- 删除 state。
+- 验证抛出 `KeyError`。
+- 防止推理 observation 没有 robot state。
+
+`test_validate_single_step_observation_contract_rejects_temporal_state`
+
+- 把 state 写成 `[B, T, state_dim]`。
+- 验证抛出 `ValueError`。
+- 防止调用者把 queue-stacked observation 传到单步 contract。
+
+`test_validate_single_step_observation_contract_rejects_temporal_image`
+
+- 把 image 写成 `[B, T, C, H, W]`。
+- 验证抛出 `ValueError`。
+- 防止单步推理和 training batch image shape 混用。
+
+`test_validate_single_step_observation_contract_rejects_missing_images_and_env_state`
+
+- 只提供 state，不提供 image feature key，也不提供 env-state。
+- 验证抛出 `ValueError`。
+- 防止推理 observation 没有任何 conditioning input。
+
+### 6. 与原版实现的区别
+
+保持一致的 shape 语义：
+
+- training state 仍是 `[B, n_obs_steps, state_dim]`。
+- training images 仍是 `[B, n_obs_steps, num_cameras, C, H, W]`。
+- training env-state 仍是 `[B, n_obs_steps, env_dim]`。
+- training action 仍是 `[B, horizon, action_dim]`。
+- optional `action_is_pad` 仍是 `[B, horizon]`。
+- single-step inference state 仍是 `[B, state_dim]`。
+- single-step inference image feature 仍是 `[B, C, H, W]`。
+- image stacking 仍使用 legacy 的 `dim=-4`。
+
+被抽成显式 contract 的 legacy 隐式逻辑：
+
+- `forward(batch)` 中的 camera stacking。
+- `select_action(batch)` 中的 camera stacking。
+- `compute_loss_and_metrics(...)` 中的 state/action/image-env presence check。
+- `compute_loss_and_metrics(...)` 中的 `n_obs_steps` 和 `horizon` check。
+- `_prepare_global_conditioning(...)` 对 `[B, T, N, C, H, W]` 的隐式假设。
+- `generate_actions(...)` 对 `[B, n_obs_steps, state_dim]` 的隐式假设。
+
+仍没有实现的行为：
+
+- 不创建 `modeling_diffusion_policy.py`。
+- 不实现 SpatialSoftmax。
+- 不实现 RGB encoder。
+- 不实现 U-Net。
+- 不实现 scheduler。
+- 不实现 denoising loss。
+- 不实现 sampling。
+- 不实现 action queue。
+- 不实现 `select_action`。
+- 不实现 training `forward`。
+
+为什么本阶段不涉及 processor normalization：
+
+- Phase 2 已经覆盖 processor factory、normalizer、unnormalizer、device transfer、batch dimension 和 action converter wiring。
+- Phase 3 关注的是 processor 之后、模型之前的 tensor shape。
+- normalization 数值正确性和 shape contract 是两个边界，分开测试更容易定位问题。
+
+为什么本阶段不涉及 model forward：
+
+- model forward 会引入 encoder、conditioning、denoising network、scheduler 和 loss。
+- 这些都依赖当前 contract。
+- 在 contract 稳定前加入 model forward，会让 shape bug 和模型 bug 混在一起。
+
+### 7. 当前限制
+
+当前只有 tensor contract：
+
+- 可以 stack 多相机 image feature。
+- 可以验证 post-stacking training batch。
+- 可以验证 single-step inference observation。
+- 可以验证 optional `action_is_pad` 的 shape。
+
+当前还没有：
+
+- 模型；
+- SpatialSoftmax；
+- RGB encoder；
+- U-Net；
+- scheduler；
+- diffusion loss；
+- sampling；
+- action queue；
+- training `forward`；
+- `select_action` inference。
+
+因此当前还不能训练，也还不能推理。
+
+本阶段 pytest 受本地环境阻塞，具体结果：
+
+```text
+python -m pytest tests/policies/diffusion_policy/test_configuration_diffusion_policy.py tests/policies/diffusion_policy/test_processor_diffusion_policy.py tests/policies/diffusion_policy/test_tensor_contract.py -q
+```
+
+失败原因：
+
+```text
+/usr/bin/python: No module named pytest
+```
+
+可用解释器的依赖 spot check 也显示系统 Python 和 `.venv` 都缺少测试所需的 `pytest` 和 `torch`：
+
+```text
+python -c "import pytest; print(pytest.__version__)"
+ModuleNotFoundError: No module named 'pytest'
+
+python -c "import torch; print(torch.__version__)"
+ModuleNotFoundError: No module named 'torch'
+
+.venv/bin/python -c "import pytest; print(pytest.__version__)"
+ModuleNotFoundError: No module named 'pytest'
+
+.venv/bin/python -c "import torch; print(torch.__version__)"
+ModuleNotFoundError: No module named 'torch'
+```
+
+```text
+uv run python -m pytest tests/policies/diffusion_policy/test_configuration_diffusion_policy.py tests/policies/diffusion_policy/test_processor_diffusion_policy.py tests/policies/diffusion_policy/test_tensor_contract.py -q
+```
+
+sandbox 内失败原因：
+
+```text
+snap-confine is packaged without necessary permissions and cannot continue
+required permitted capability cap_dac_override not found in current capabilities
+```
+
+按权限规则在 sandbox 外重试后，`uv run` 仍未进入 pytest，依赖构建失败：
+
+```text
+Failed to download and build `egl-probe @ git+https://github.com/huggingface/egl_probe.git#egg=egl_probe`
+Package metadata name `hf-egl-probe` does not match given name `egl-probe`
+```
+
+compile 检查通过：
+
+```text
+python -m compileall src/lerobot/policies/diffusion_policy tests/policies/diffusion_policy
+```
+
+结果包含：
+
+```text
+Compiling 'src/lerobot/policies/diffusion_policy/tensor_contract.py'...
+Compiling 'tests/policies/diffusion_policy/test_tensor_contract.py'...
+```
+
+`.venv` 的 compile 检查也通过：
+
+```text
+.venv/bin/python -m compileall src/lerobot/policies/diffusion_policy tests/policies/diffusion_policy
+```
+
+import smoke test 使用 `PYTHONPATH=src` 仍被本地依赖阻塞：
+
+```text
+ModuleNotFoundError: No module named 'draccus'
+```
+
+直接不设置 `PYTHONPATH` 时，解释器还会先报：
+
+```text
+ModuleNotFoundError: No module named 'lerobot'
+```
+
+这些失败都发生在测试环境和项目依赖加载阶段，不是 tensor contract 断言失败。
+
+### 8. 下一阶段建议
+
+推荐下一阶段：
+
+```text
+Phase 4 - 从零实现 SpatialSoftmax
+```
+
+原因：
+
+- Phase 3 已经把 image/state/action 的最小 shape 边界固定下来。
+- SpatialSoftmax 是第一个真正进入视觉模型路径的 DP 模块。
+- 它只需要处理 feature map 到 keypoint-style feature 的局部逻辑，适合作为模型实现的第一步。
+- 有了 Phase 3 的 contract，后续 RGB encoder 和 U-Net 可以依赖稳定的 image/state/action shape，不必在模型内部反复猜测输入维度。

@@ -247,7 +247,8 @@ Sampling and action output:
   - Status: config skeleton and scoped tests added.
 - [x] Phase 2 - Processor compatibility
   - Status: processor factory and tests added, full pytest pending because of local environment issue: `pytest` and `torch` are missing in available interpreters; `uv run` fails while building `egl-probe`.
-- [ ] Phase 3 - Minimal image/state/action tensor contract
+- [x] Phase 3 - Minimal image/state/action tensor contract
+  - Status: tensor contract utilities and scoped tests added; full pytest pending because of local environment issue: `pytest`/`torch`/`draccus` are missing in available interpreters, and `uv run` still fails while building `egl-probe`.
 - [ ] Phase 4 - SpatialSoftmax from scratch
 - [ ] Phase 5 - RGB encoder from scratch
 - [ ] Phase 6 - Sinusoidal timestep embedding
