@@ -245,7 +245,8 @@ Sampling and action output:
 - [x] Phase 0 - Dependency inspection and legacy backup
 - [x] Phase 1 - Config skeleton compatible with LeRobot
   - Status: config skeleton and scoped tests added.
-- [ ] Phase 2 - Processor compatibility
+- [x] Phase 2 - Processor compatibility
+  - Status: processor factory and tests added, full pytest pending because of local environment issue: `pytest` and `torch` are missing in available interpreters; `uv run` fails while building `egl-probe`.
 - [ ] Phase 3 - Minimal image/state/action tensor contract
 - [ ] Phase 4 - SpatialSoftmax from scratch
 - [ ] Phase 5 - RGB encoder from scratch

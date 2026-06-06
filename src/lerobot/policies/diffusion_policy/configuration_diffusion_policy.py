@@ -43,8 +43,8 @@ class DiffusionPolicyConfig(PreTrainedConfig):
 
     # LeRobot compatibility fields. These drive dataset temporal sampling and processor normalization.
     n_obs_steps: int = 2
-    horizon: int = 8
-    n_action_steps: int = 4
+    horizon: int = 16
+    n_action_steps: int = 8
 
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
@@ -54,8 +54,8 @@ class DiffusionPolicyConfig(PreTrainedConfig):
         }
     )
 
-    # With the default DP timing, this is 8 - 4 - 2 + 1. Keeping it explicit mirrors the dataset API.
-    drop_n_last_frames: int = 3
+    # With the default DP timing, this is 16 - 8 - 2 + 1. Keeping it explicit mirrors the dataset API.
+    drop_n_last_frames: int = 7
 
     # DP image encoder fields. The actual processor/model implementation is deferred to later phases.
     vision_backbone: str = "resnet18"

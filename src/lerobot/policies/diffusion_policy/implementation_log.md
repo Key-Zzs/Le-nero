@@ -659,3 +659,679 @@ reward_delta_indices = None
 ```text
 Phase 2 - Processor compatibility
 ```
+
+## Phase 2 - Processor 兼容性
+
+### 1. 本阶段目标
+
+Phase 2 只实现新的 from-scratch Diffusion Policy 的 processor 兼容层：
+
+- 新增 `processor_diffusion_policy.py`。
+- 新增 `make_diffusion_policy_pre_post_processors(...)`。
+- 复用 LeRobot 现有 processor primitives。
+- 让新目录下的 processor factory 在行为上对齐原版 Diffusion Policy。
+- 添加 scoped processor tests，验证 pipeline 构建、step 顺序、normalization、device、batch dimension、postprocessor unnormalization 和 converter wiring。
+
+本阶段仍然不实现：
+
+- model
+- RGB encoder
+- SpatialSoftmax
+- U-Net
+- scheduler
+- loss
+- sampling
+- action queue
+- inference / `select_action`
+- factory 注册迁移
+
+原因是 processor 是 LeRobot policy 的数据边界。先稳定 processor contract，可以保证后续模型实现拿到的 batch、action target、device placement 和 normalization 行为都与原版保持一致。
+
+### 2. 修改文件
+
+本阶段修改/新增文件：
+
+```text
+src/lerobot/policies/diffusion_policy/processor_diffusion_policy.py
+tests/policies/diffusion_policy/test_processor_diffusion_policy.py
+src/lerobot/policies/diffusion_policy/configuration_diffusion_policy.py
+src/lerobot/policies/diffusion_policy/README.md
+src/lerobot/policies/diffusion_policy/README_zh-CN.md
+src/lerobot/policies/diffusion_policy/implementation_log.md
+```
+
+其中 `configuration_diffusion_policy.py` 只做了一个 Phase 1 小修正：
+
+```text
+horizon: 8 -> 16
+n_action_steps: 4 -> 8
+drop_n_last_frames: 3 -> 7
+```
+
+修正原因：Phase 1 的 README、implementation log 和已有配置测试都记录默认值应为 `horizon=16`、`n_action_steps=8`、`drop_n_last_frames=7`，而当前源文件实际写成了 `8/4/3`。这个不一致一旦 pytest 环境可用，会导致 Phase 1 config tests 失败。该修正只恢复 Phase 1 已记录的配置契约，没有加入新的模型行为。
+
+没有修改：
+
+```text
+src/lerobot/policies/factory.py
+src/lerobot/policies/__init__.py
+src/lerobot/policies/diffusion/
+src/lerobot/policies/diffusion_legacy/
+training scripts
+dataset code
+robot communication code
+```
+
+仓库中已有中文 README 文件名是：
+
+```text
+README_zh-CN.md
+```
+
+本阶段使用了现有文件，没有创建重复的 `README_zh-CH.md`。
+
+### 3. 新增函数逐个解释
+
+#### `make_diffusion_policy_pre_post_processors(...)`
+
+- 函数用途
+
+  构造一组 LeRobot-compatible policy preprocessor 和 postprocessor，用于新的 `DiffusionPolicyConfig`。
+
+  函数位置：
+
+  ```text
+  src/lerobot/policies/diffusion_policy/processor_diffusion_policy.py
+  ```
+
+  函数名：
+
+  ```python
+  make_diffusion_policy_pre_post_processors
+  ```
+
+- 输入参数
+
+  ```python
+  config: DiffusionPolicyConfig
+  ```
+
+  新的 from-scratch Diffusion Policy 配置。processor 会读取：
+
+  - `config.input_features`
+  - `config.output_features`
+  - `config.normalization_mapping`
+  - `config.device`
+
+  ```python
+  dataset_stats: dict[str, dict[str, torch.Tensor]] | None = None
+  ```
+
+  dataset normalization stats。和原版一样，stats 可以是 `None`。如果 stats 缺失，LeRobot 的 `NormalizerProcessorStep` / `UnnormalizerProcessorStep` 会保留无 stats 的行为，而不是在本函数里手动处理。
+
+- 返回值
+
+  返回二元组：
+
+  ```python
+  (
+      PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
+      PolicyProcessorPipeline[PolicyAction, PolicyAction],
+  )
+  ```
+
+  第一个是 preprocessor，用于 dataset/offline batch 输入。
+
+  第二个是 postprocessor，用于 policy 输出 action。
+
+- 处理流程
+
+  preprocessor steps：
+
+  ```text
+  RenameObservationsProcessorStep(rename_map={})
+  AddBatchDimensionProcessorStep()
+  DeviceProcessorStep(device=config.device)
+  NormalizerProcessorStep(
+      features={**config.input_features, **config.output_features},
+      norm_map=config.normalization_mapping,
+      stats=dataset_stats,
+  )
+  ```
+
+  postprocessor steps：
+
+  ```text
+  UnnormalizerProcessorStep(
+      features=config.output_features,
+      norm_map=config.normalization_mapping,
+      stats=dataset_stats,
+  )
+  DeviceProcessorStep(device="cpu")
+  ```
+
+  pipeline 名称使用 LeRobot 默认常量：
+
+  ```python
+  POLICY_PREPROCESSOR_DEFAULT_NAME
+  POLICY_POSTPROCESSOR_DEFAULT_NAME
+  ```
+
+  postprocessor converter 使用原版 Diffusion Policy 相同函数：
+
+  ```python
+  policy_action_to_transition
+  transition_to_policy_action
+  ```
+
+- 每一个 processor step 的作用
+
+  `RenameObservationsProcessorStep(rename_map={})`
+
+  当前 rename map 为空，行为上不改 key。保留这个 step 是为了对齐 LeRobot 现有 policy processor 结构，并保留未来需要 observation key rename 时的兼容 hook。
+
+  `AddBatchDimensionProcessorStep()`
+
+  将单步输入补成 batch size 1。例如：
+
+  ```text
+  observation.state: (state_dim,) -> (1, state_dim)
+  observation.image: (C, H, W) -> (1, C, H, W)
+  action: (action_dim,) -> (1, action_dim)
+  ```
+
+  这让单步 inference-like 输入和 batched training 输入都能通过同一条 processor pipeline。
+
+  `DeviceProcessorStep(device=config.device)`
+
+  将 batch 中的 tensor 移到配置指定设备。后续模型还没实现，但 processor contract 必须先保证模型收到的 tensor 已经位于 policy device。
+
+  `NormalizerProcessorStep(...)`
+
+  使用 LeRobot 内置 normalization 逻辑，根据 feature type 和 `config.normalization_mapping` 对 observation 和 action target 归一化。
+
+  `UnnormalizerProcessorStep(...)`
+
+  将模型输出的 normalized policy action 反归一化回 dataset/robot action scale。
+
+  `DeviceProcessorStep(device="cpu")`
+
+  将 postprocessed action 移回 CPU，保持原版 LeRobot Diffusion Policy 的输出边界。
+
+- 为什么要把 `input_features` 和 `output_features` 合并后送入 `NormalizerProcessorStep`
+
+  Diffusion Policy 的训练 batch 不只包含 observation，也包含 action target。
+
+  observation 属于 input features：
+
+  ```text
+  observation.state
+  observation.image
+  observation.environment_state
+  ```
+
+  action 属于 output features：
+
+  ```text
+  action
+  ```
+
+  训练阶段的 denoising loss 需要在 normalized action space 中计算。如果 preprocessor 只传入 `input_features`，那么 observation 会归一化，但 `action` target 不会归一化，后续训练目标会和 diffusion sampling/denoising 的动作尺度不一致。
+
+  因此 preprocessor 必须和原版一致：
+
+  ```python
+  features={**config.input_features, **config.output_features}
+  ```
+
+- 为什么 action target 在训练阶段需要归一化
+
+  Diffusion Policy 通常在规范化后的 action space 中学习噪声预测或样本预测。这样不同关节/动作维度的数值范围会被拉到更稳定的尺度，默认 `ACTION` 使用 `MIN_MAX` 映射到 `[-1, 1]`。
+
+  如果 action target 不归一化，模型后续会同时面对 normalized observation 和原始尺度 action target，训练 loss 的数值尺度会不稳定，也会和 postprocessor 的 unnormalization 方向不匹配。
+
+- 为什么 postprocessor 只处理 `output_features`
+
+  postprocessor 的输入是模型输出的 `PolicyAction`，不是完整训练 batch。它只需要知道 action 的 feature schema 和 action 的 normalization stats。
+
+  所以 postprocessor 使用：
+
+  ```python
+  features=config.output_features
+  ```
+
+  这也和原版 `make_diffusion_pre_post_processors(...)` 保持一致。
+
+- 为什么 action 输出要反归一化
+
+  模型内部输出的是 normalized action。真实环境、机器人控制、离线评估日志通常需要原始 action scale。
+
+  postprocessor 负责把：
+
+  ```text
+  normalized action -> dataset/robot action scale
+  ```
+
+  这样模型实现不需要手写反归一化逻辑，也不会把 normalization 细节散落在 inference 代码里。
+
+- 为什么最终要移动到 CPU
+
+  原版 Diffusion Policy postprocessor 在反归一化后调用：
+
+  ```python
+  DeviceProcessorStep(device="cpu")
+  ```
+
+  这会让 policy 输出边界保持 CPU tensor。这样上层 eval/deploy/robot 代码不需要假设 action 仍在 CUDA/MPS 上，也避免 GPU tensor 泄漏到机器人通信层或日志层。
+
+- 与原版 `make_diffusion_pre_post_processors(...)` 的相同点
+
+  行为保持一致：
+
+  - preprocessor step 顺序一致；
+  - postprocessor step 顺序一致；
+  - 使用相同 processor primitives；
+  - 使用相同 default processor names；
+  - preprocessor 同时 normalizes input features 和 output/action features；
+  - postprocessor 只 unnormalizes output/action features；
+  - postprocessed action 移回 CPU；
+  - postprocessor 使用相同 converter：
+    - `policy_action_to_transition`
+    - `transition_to_policy_action`
+
+- 与原版 `make_diffusion_pre_post_processors(...)` 的区别
+
+  区别只在命名和 config 类型：
+
+  ```text
+  原版 config: DiffusionConfig
+  新版 config: DiffusionPolicyConfig
+  ```
+
+  ```text
+  原版函数: make_diffusion_pre_post_processors
+  新版函数: make_diffusion_policy_pre_post_processors
+  ```
+
+  新函数导入：
+
+  ```python
+  from lerobot.policies.diffusion_policy.configuration_diffusion_policy import DiffusionPolicyConfig
+  ```
+
+  本阶段没有把新 processor 注册进全局 factory，也没有替换旧的 `"diffusion"` policy。
+
+### 4. 测试文件逐项解释
+
+测试文件：
+
+```text
+tests/policies/diffusion_policy/test_processor_diffusion_policy.py
+```
+
+本测试文件使用局部 helper 构造最小 fake config 和 fake stats，不依赖真实模型或真实 dataset。
+
+#### `test_processor_factory_imports`
+
+目的：
+
+- 验证新函数可以从新模块正常 import。
+
+验证逻辑：
+
+- 从 `lerobot.policies.diffusion_policy.processor_diffusion_policy` import `make_diffusion_policy_pre_post_processors`。
+- 断言导入到的对象就是测试文件顶部使用的 factory。
+
+对应风险：
+
+- 新文件路径、函数名、模块 import 失败会阻断后续所有使用者。
+
+#### `test_pipeline_construction_uses_default_names`
+
+目的：
+
+- 验证 preprocessor/postprocessor 可以成功构造。
+- 验证 pipeline name 使用 LeRobot 默认名称。
+
+验证逻辑：
+
+- 构造 fake `DiffusionPolicyConfig`。
+- 构造 fake dataset stats。
+- 调用 factory。
+- 断言：
+
+  ```text
+  preprocessor.name == POLICY_PREPROCESSOR_DEFAULT_NAME
+  postprocessor.name == POLICY_POSTPROCESSOR_DEFAULT_NAME
+  ```
+
+对应风险：
+
+- processor name 错误会影响保存、加载和 LeRobot 默认 processor 文件命名约定。
+
+#### `test_processor_step_composition_matches_legacy_order`
+
+目的：
+
+- 验证 step 类型和顺序与 legacy Diffusion Policy 一致。
+
+验证逻辑：
+
+- preprocessor 必须是：
+
+  ```text
+  RenameObservationsProcessorStep
+  AddBatchDimensionProcessorStep
+  DeviceProcessorStep
+  NormalizerProcessorStep
+  ```
+
+- postprocessor 必须是：
+
+  ```text
+  UnnormalizerProcessorStep
+  DeviceProcessorStep
+  ```
+
+对应风险：
+
+- step 顺序改变会改变可观察行为。例如如果先 normalize 再加 batch，broadcast 行为和 device placement 都可能不同；如果先 CPU 再 unnormalize，stats/device 适配也会不同。
+
+#### `test_preprocessor_normalizes_observations_visuals_and_training_action_targets`
+
+目的：
+
+- 验证 observation 和 action target 都走 normalization。
+- 验证 visual feature 也可以走配置的 mean/std normalization 路径。
+
+验证逻辑：
+
+- fake state：
+
+  ```text
+  min = [0, -2]
+  max = [10, 2]
+  input = [5, 0]
+  expected normalized = [0, 0]
+  ```
+
+- fake action：
+
+  ```text
+  min = [-1, -2, 0]
+  max = [1, 2, 10]
+  input = [0, 0, 5]
+  expected normalized = [0, 0, 0]
+  ```
+
+- fake image：
+
+  ```text
+  mean = 10
+  std = 2
+  input = 12
+  expected normalized = 1
+  ```
+
+对应风险：
+
+- 如果 output/action features 没有被传入 preprocessor normalizer，训练 action target 会保持原始尺度。
+- 如果 visual normalization 路径断掉，后续 image encoder 前的数据契约会不稳定。
+
+#### `test_preprocessor_adds_batch_dimension_and_moves_tensors_to_config_device`
+
+目的：
+
+- 验证单步输入会被补 batch dimension。
+- 验证 tensor 会移动到 `config.device`。
+
+验证逻辑：
+
+- 输入：
+
+  ```text
+  observation.state: (2,)
+  observation.image: (3, 2, 2)
+  action: (3,)
+  ```
+
+- 输出：
+
+  ```text
+  observation.state: (1, 2)
+  observation.image: (1, 3, 2, 2)
+  action: (1, 3)
+  ```
+
+- 当前测试使用 CPU-only 配置，断言所有 tensor 的 `device.type == "cpu"`。
+
+对应风险：
+
+- 没有 batch dimension 时，后续模型 forward 很容易收到 rank 不一致的 tensor。
+- device 不一致会导致模型和输入 tensor 不在同一设备。
+
+#### `test_postprocessor_unnormalizes_policy_action_and_returns_cpu_tensor`
+
+目的：
+
+- 验证 postprocessor 可以把 normalized action 反归一化回原始 action scale。
+- 验证输出 action 位于 CPU。
+
+验证逻辑：
+
+- 输入 normalized action：
+
+  ```text
+  [[0, 0, 0]]
+  ```
+
+- fake action stats：
+
+  ```text
+  min = [-1, -2, 0]
+  max = [1, 2, 10]
+  ```
+
+- expected unnormalized action：
+
+  ```text
+  [[0, 0, 5]]
+  ```
+
+对应风险：
+
+- 如果 postprocessor 不反归一化，上层环境会收到 normalized action，而不是 robot/dataset scale action。
+- 如果输出不回 CPU，部署层可能收到 GPU tensor。
+
+#### `test_postprocessor_converter_functions_match_legacy_diffusion_behavior`
+
+目的：
+
+- 验证 postprocessor converter wiring 与 legacy Diffusion Policy 一致。
+
+验证逻辑：
+
+- 断言：
+
+  ```python
+  postprocessor.to_transition is policy_action_to_transition
+  postprocessor.to_output is transition_to_policy_action
+  ```
+
+对应风险：
+
+- 如果 converter 错误，postprocessor 可能无法把裸 `PolicyAction` tensor 放进 `EnvTransition`，或者无法从最终 transition 取回 policy action。
+
+### 5. 与原版实现的区别
+
+保持一致的行为：
+
+- preprocessor step 顺序一致；
+- postprocessor step 顺序一致；
+- processor pipeline names 一致；
+- normalization/unnormalization 复用同一套 LeRobot primitives；
+- action target 在训练 preprocessor 中归一化；
+- policy output action 在 postprocessor 中反归一化；
+- postprocessed action 移回 CPU；
+- postprocessor converter 函数一致。
+
+命名变化：
+
+- 原版模块：
+
+  ```text
+  lerobot.policies.diffusion.processor_diffusion
+  ```
+
+- 新模块：
+
+  ```text
+  lerobot.policies.diffusion_policy.processor_diffusion_policy
+  ```
+
+- 原版函数：
+
+  ```text
+  make_diffusion_pre_post_processors
+  ```
+
+- 新函数：
+
+  ```text
+  make_diffusion_policy_pre_post_processors
+  ```
+
+- 原版 config：
+
+  ```text
+  DiffusionConfig
+  ```
+
+- 新 config：
+
+  ```text
+  DiffusionPolicyConfig
+  ```
+
+仍未实现的高级功能：
+
+- model；
+- RGB encoder；
+- SpatialSoftmax；
+- Conditional 1D U-Net；
+- DDPM/DDIM scheduler；
+- denoising loss；
+- conditional sampling；
+- receding-horizon action queue；
+- `forward(batch)`；
+- `select_action(batch)`；
+- checkpoint 权重兼容；
+- global factory 注册。
+
+为什么本阶段没有实现 model/U-Net/scheduler/loss/inference：
+
+- processor contract 是模型之前的数据边界；
+- 先确保 normalization、device、batch 和 converter 与原版一致，后续模型实现才能用稳定输入；
+- 如果现在同时加入 model 和 scheduler，问题会混在一起，难以判断失败来自数据处理还是模型逻辑；
+- 当前阶段目标是 scoped compatibility，不是可训练 policy。
+
+### 6. 当前限制
+
+当前 processor 只建立了数据预处理/后处理契约：
+
+- 可以构造 preprocessor/postprocessor；
+- 可以对 fake batch 做 batch dimension、device transfer、normalization；
+- 可以对 fake normalized action 做 unnormalization 和 CPU transfer；
+- 可以保持 legacy converter wiring。
+
+当前还没有真实模型：
+
+- 还不能进行训练 `forward(batch)`；
+- 还不能计算 denoising loss；
+- 还不能进行 `select_action` 推理；
+- 还没有 action queue；
+- 还不能替换 LeRobot 内置 `"diffusion"` policy。
+
+本阶段 pytest 受本地环境阻塞，具体结果：
+
+```text
+python -m pytest tests/policies/diffusion_policy/test_configuration_diffusion_policy.py -q
+```
+
+失败原因：
+
+```text
+/usr/bin/python: No module named pytest
+```
+
+```text
+.venv/bin/python -m pytest tests/policies/diffusion_policy/test_configuration_diffusion_policy.py tests/policies/diffusion_policy/test_processor_diffusion_policy.py -q
+```
+
+失败原因：
+
+```text
+.venv/bin/python: No module named pytest
+```
+
+```text
+uv run python -m pytest tests/policies/diffusion_policy/test_configuration_diffusion_policy.py tests/policies/diffusion_policy/test_processor_diffusion_policy.py -q
+```
+
+第一次在 sandbox 内失败：
+
+```text
+snap-confine is packaged without necessary permissions and cannot continue
+required permitted capability cap_dac_override not found in current capabilities
+```
+
+按 sandbox 规则在外部重试后，`uv run` 仍未进入 pytest，依赖构建失败：
+
+```text
+Failed to download and build `egl-probe @ git+https://github.com/huggingface/egl_probe.git#egg=egl_probe`
+Package metadata name `hf-egl-probe` does not match given name `egl-probe`
+```
+
+compile 检查通过：
+
+```text
+.venv/bin/python -m compileall src/lerobot/policies/diffusion_policy tests/policies/diffusion_policy
+```
+
+结果：
+
+```text
+configuration_diffusion_policy.py compiled
+processor_diffusion_policy.py compiled
+test_configuration_diffusion_policy.py compiled
+test_processor_diffusion_policy.py compiled
+```
+
+import smoke test 暂未完成，原因是可用解释器缺少 `torch`：
+
+```text
+.venv/bin/python -c "import torch; print(torch.__version__)"
+ModuleNotFoundError: No module named 'torch'
+```
+
+系统 Python 也是同样缺少 `torch`，且版本为 Python 3.8.10，不满足项目 `pyproject.toml` 中的 `requires-python >=3.10`。
+
+### 7. 下一阶段建议
+
+推荐下一阶段：
+
+```text
+Phase 3 - 最小 image/state/action tensor contract
+```
+
+原因：
+
+- Phase 2 只验证 processor 边界，还没有定义模型内部如何接收经过 processor 的 batch。
+- 进入 SpatialSoftmax、RGB encoder、U-Net 之前，应该先用 fake tensors 固定最小 shape contract。
+- 下一阶段应明确：
+  - `observation.state` 的 batch/time/action 维度如何组织；
+  - 单相机和多相机 image key 如何汇总；
+  - `action` target 的 `(B, horizon, action_dim)` 合同；
+  - 缺失 image/state/env-state 时应如何报错；
+  - processor 输出和未来 model 输入之间的 key/shape 对齐。
+- 如果跳过这个阶段直接写 SpatialSoftmax、RGB encoder 或 U-Net，很容易把 shape 错误藏进模型内部，后续排查成本会高很多。

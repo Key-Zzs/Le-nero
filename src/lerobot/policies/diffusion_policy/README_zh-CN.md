@@ -245,7 +245,8 @@ Sampling 和 action 输出：
 - [x] Phase 0 - 依赖检查和 legacy 备份
 - [x] Phase 1 - 与 LeRobot 兼容的 config skeleton
   - 状态：config skeleton 和 scoped tests 已添加。
-- [ ] Phase 2 - Processor 兼容性
+- [x] Phase 2 - Processor 兼容性
+  - 状态：processor factory 和测试已添加，完整 pytest 因本地环境问题暂未完成：可用解释器缺少 `pytest` 和 `torch`，`uv run` 在构建 `egl-probe` 时失败。
 - [ ] Phase 3 - 最小 image/state/action tensor contract
 - [ ] Phase 4 - 从零实现 SpatialSoftmax
 - [ ] Phase 5 - 从零实现 RGB encoder
