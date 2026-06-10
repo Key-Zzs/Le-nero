@@ -249,7 +249,8 @@ Sampling 和 action 输出：
   - 状态：processor factory 和测试已添加，完整 pytest 因本地环境问题暂未完成：可用解释器缺少 `pytest` 和 `torch`，`uv run` 在构建 `egl-probe` 时失败。
 - [x] Phase 3 - 最小 image/state/action tensor contract
   - 状态：tensor contract 工具函数和测试已添加，完整 pytest 因本地环境问题暂未完成：可用解释器缺少 `pytest`/`torch`/`draccus`，且 `uv run` 仍在构建 `egl-probe` 时失败。
-- [ ] Phase 4 - 从零实现 SpatialSoftmax
+- [x] Phase 4 - 从零实现 SpatialSoftmax
+  - 状态：SpatialSoftmax 模块和测试已添加，完整 pytest 因本地环境问题暂未完成：系统 Python 缺少 `pytest`/`torch`，`.venv` 缺少 `torch`，且 `uv run` 被 `snap-confine` 权限问题阻塞。
 - [ ] Phase 5 - 从零实现 RGB encoder
 - [ ] Phase 6 - Sinusoidal timestep embedding
 - [ ] Phase 7 - FiLM residual block

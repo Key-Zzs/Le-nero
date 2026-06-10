@@ -1924,3 +1924,472 @@ Phase 4 - 从零实现 SpatialSoftmax
 - SpatialSoftmax 是第一个真正进入视觉模型路径的 DP 模块。
 - 它只需要处理 feature map 到 keypoint-style feature 的局部逻辑，适合作为模型实现的第一步。
 - 有了 Phase 3 的 contract，后续 RGB encoder 和 U-Net 可以依赖稳定的 image/state/action shape，不必在模型内部反复猜测输入维度。
+
+## Phase 4 - 从零实现 SpatialSoftmax
+
+### 1. 本阶段目标
+
+本阶段只实现新的从零版 `SpatialSoftmax`：
+
+- 新增 `src/lerobot/policies/diffusion_policy/spatial_softmax.py`。
+- 新增 `tests/policies/diffusion_policy/test_spatial_softmax.py`。
+- 保持 legacy Diffusion Policy 中 SpatialSoftmax 的数学行为。
+- 使用 PyTorch 构造坐标网格，不再依赖 numpy。
+- 支持 `num_keypoints=None` 和正整数 `num_keypoints`。
+- 将固定坐标网格注册为 buffer。
+- 添加局部 scoped tests，先把 feature map 到 keypoint coordinate 的行为固定下来。
+
+本阶段刻意不实现：
+
+- RGB encoder
+- ResNet wrapper
+- image crop
+- U-Net
+- timestep embedding
+- FiLM block
+- scheduler
+- diffusion loss
+- sampling
+- action queue
+- `select_action`
+- training `forward`
+- `modeling_diffusion_policy.py`
+
+这样做是为了让视觉路径的第一个真实模块足够小、可测试，也方便后续 RGB encoder 接入时直接复用已经验证过的 keypoint pooling 行为。
+
+### 2. 修改文件
+
+本阶段新增：
+
+```text
+src/lerobot/policies/diffusion_policy/spatial_softmax.py
+tests/policies/diffusion_policy/test_spatial_softmax.py
+```
+
+本阶段更新：
+
+```text
+src/lerobot/policies/diffusion_policy/README.md
+src/lerobot/policies/diffusion_policy/README_zh-CN.md
+src/lerobot/policies/diffusion_policy/implementation_log.md
+```
+
+Phase 3 在 README 中已经是 `[x]`，所以本阶段没有额外修正 Phase 3 checkbox。Phase 4 已在英文和中文 README 中从 `[ ]` 更新为 `[x]`，并记录了本地 pytest 环境阻塞原因。
+
+### 3. SpatialSoftmax 的数学作用
+
+`SpatialSoftmax` 的输入是 CNN 或未来 RGB encoder 产生的 feature map：
+
+```text
+[B, C, H, W]
+```
+
+含义是：
+
+- `B`：batch size。
+- `C`：feature channel 数。
+- `H, W`：feature map 的空间尺寸。
+
+普通 max pooling 会在局部窗口里取最大值，输出更强的局部响应，但会丢掉精确的连续位置信息。hard argmax 虽然能找出最大激活的位置，但位置选择是离散操作，通常不可导，不适合直接作为可反向传播的神经网络模块。
+
+`SpatialSoftmax` 可以看作 differentiable soft-argmax：
+
+1. 对每个 channel 的 `H * W` 个空间位置做 softmax。
+2. 得到一个空间概率分布。
+3. 用这个概率分布对归一化坐标网格求期望。
+4. 输出每个 channel 或 keypoint map 的连续二维坐标。
+
+坐标网格使用：
+
+```text
+x in [-1, 1]
+y in [-1, 1]
+```
+
+其中 `x` 沿 width 方向变化，`y` 沿 height 方向变化。归一化到 `[-1, 1]` 的好处是输出和真实图像分辨率解耦：无论 feature map 是 `10x12` 还是 `7x7`，输出都在同一个坐标尺度里。后续 policy 可以把它当作紧凑、稳定的视觉特征使用。
+
+输出 shape 是：
+
+```text
+[B, K, 2]
+```
+
+其中：
+
+- `K = C`，当 `num_keypoints is None`。
+- `K = num_keypoints`，当启用 learnable `1x1 Conv2d` 投影。
+- 最后一维的 `2` 表示 `(x, y)`。
+
+这个模块适合机器人视觉策略，因为机器人控制通常关心“重要物体或可操作部位在哪里”。`SpatialSoftmax` 不直接输出整张 feature map，而是把每个响应图压缩成类似关键点的坐标，使后续低维控制网络更容易利用空间信息。
+
+### 4. 新增类和函数逐个解释
+
+#### `SpatialSoftmax.__init__(...)`
+
+函数用途：
+
+- 初始化一个从 `[B, C, H, W]` feature map 到 `[B, K, 2]` 坐标的 differentiable soft-argmax 模块。
+- 保存输入 feature map 的静态 `(C, H, W)` contract。
+- 可选创建 learnable keypoint projection。
+- 构造并注册固定归一化坐标网格。
+
+输入参数：
+
+```python
+def __init__(
+    self,
+    input_shape: tuple[int, int, int],
+    num_keypoints: int | None = None,
+) -> None:
+```
+
+`input_shape` 必须是 `(C, H, W)`，并且三个值都必须是正整数。本阶段显式校验这些条件，如果传入长度不是 3，或者 `C/H/W` 中有 0、负数、非整数，会抛出清晰的 `ValueError`。
+
+`num_keypoints` 可以是：
+
+- `None`：不做 channel 投影，输出 keypoint 数 `K` 等于输入 channel 数 `C`。
+- 正整数：先用 `nn.Conv2d(C, num_keypoints, kernel_size=1)` 把 channel 数从 `C` 投影到 `K`。
+
+为什么使用 `1x1 Conv2d`：
+
+- 它只在 channel 维做 learnable linear mixing。
+- 它不改变空间尺寸 `H, W`。
+- 它可以让模型从许多 CNN channels 中学习出固定数量的 keypoint heatmaps。
+- 这和 legacy SpatialSoftmax 的 `num_kp` 行为一致。
+
+`pos_grid` 的构造流程：
+
+1. 用 `torch.linspace(-1.0, 1.0, steps=width)` 构造 x 坐标。
+2. 用 `torch.linspace(-1.0, 1.0, steps=height)` 构造 y 坐标。
+3. 用 `torch.meshgrid(..., indexing="ij")` 得到 `[H, W]` 网格。
+4. 展平成 `[H * W, 2]`。
+5. 每一行是一个空间位置的 `(x, y)`。
+
+`pos_grid` 是 buffer 而不是 parameter，原因是：
+
+- 它是固定几何坐标，不应该被 optimizer 更新。
+- 它需要跟随 module 一起移动到 CPU/GPU。
+- 它需要出现在 `state_dict` 中，方便保存和加载模块状态。
+- `register_buffer("pos_grid", ...)` 正好满足这些需求。
+
+与 legacy 实现的相同点：
+
+- 输入 contract 仍是 `[B, C, H, W]`。
+- 可选 `1x1 Conv2d` 仍用于把 `C` 映射到 `num_keypoints`。
+- spatial softmax 仍作用在 `H * W` 空间维。
+- 坐标仍归一化到 `[-1, 1]`。
+- 输出仍是 `[B, K, 2]`。
+
+与 legacy 实现的区别：
+
+- legacy 用 `numpy.meshgrid` 和 `np.linspace` 构造 grid。
+- 新实现用 PyTorch 的 `torch.linspace` 和 `torch.meshgrid` 构造 grid。
+- legacy 参数名是 `num_kp`，新实现参数名是 `num_keypoints`，语义更明确。
+- legacy 内部 projection 名为 `nets`，新实现命名为 `keypoint_projection`。
+- 新实现增加了 constructor 参数校验，避免非法 shape 隐式进入 forward。
+
+#### `SpatialSoftmax.forward(...)`
+
+函数用途：
+
+- 接收 `[B, C, H, W]` feature map。
+- 返回 `[B, K, 2]` normalized expected coordinate。
+
+输入 shape：
+
+```text
+[B, C, H, W]
+```
+
+输出 shape：
+
+```text
+[B, K, 2]
+```
+
+forward 流程：
+
+1. validate shape
+
+   检查输入是否是 4D tensor，并检查输入的 `C, H, W` 是否和 constructor 的 `input_shape` 完全一致。shape 不匹配时抛出 `ValueError`，错误信息包含期望 shape 和实际 shape。
+
+2. optional 1x1 projection
+
+   如果 `num_keypoints` 不为 `None`，先通过 `keypoint_projection` 把 `[B, C, H, W]` 变成 `[B, K, H, W]`。如果 `num_keypoints is None`，这一步跳过，`K = C`。
+
+3. flatten `H * W`
+
+   将 `[B, K, H, W]` reshape 成：
+
+   ```text
+   [B * K, H * W]
+   ```
+
+   这样每一行都是一个 channel/keypoint map 在所有空间位置上的激活。
+
+4. softmax over spatial dimension
+
+   对最后一维 `H * W` 做 softmax：
+
+   ```python
+   attention = torch.softmax(features, dim=-1)
+   ```
+
+   softmax 维度是空间维，而不是 channel 维。原因是 SpatialSoftmax 的目标是“每个 channel/keypoint map 在图像空间中关注哪里”，所以每个 channel 都应该独立形成自己的空间概率分布。如果对 channel 维做 softmax，就会变成不同 channels 互相竞争，丢掉每个 channel 自己的空间位置解释。
+
+5. expectation over coordinate grid
+
+   用 attention 乘以固定坐标网格：
+
+   ```text
+   [B * K, H * W] @ [H * W, 2] -> [B * K, 2]
+   ```
+
+   这就是对 `(x, y)` 坐标求期望。激活越强的位置，概率越大，对最终坐标的贡献也越大。
+
+6. reshape to `[B, K, 2]`
+
+   最后 reshape 回 batch 结构：
+
+   ```text
+   [B, K, 2]
+   ```
+
+为什么该操作可反向传播：
+
+- `1x1 Conv2d` 可导。
+- reshape 可导。
+- softmax 可导。
+- matrix multiplication 可导。
+- 输出坐标对输入 feature map 的梯度可以一路回传。
+
+shape mismatch 时如何报错：
+
+- 输入不是 4D：报错说明必须是 `[B, C, H, W]`。
+- channel 不匹配：报错说明 constructor 中的 `input_shape` 和实际 `C, H, W` 不一致。
+- height/width 不匹配：同样报错，并带出期望和实际 shape。
+
+与 legacy implementation 的关系：
+
+- 本实现保留 legacy 的数学流程。
+- 本实现不复制 legacy 的源码结构，而是用更小、更显式的 PyTorch 模块重写。
+- 本实现先独立于 RGB encoder，是因为 RGB encoder 的输出将直接喂给 SpatialSoftmax。先固定这个模块，可以让下一阶段只关注 backbone/crop/multi-camera 逻辑。
+
+### 5. 测试文件逐项解释
+
+测试文件：
+
+```text
+tests/policies/diffusion_policy/test_spatial_softmax.py
+```
+
+`test_output_shape_without_learnable_keypoint_projection`
+
+- 验证 `num_keypoints=None` 时输出 shape 是 `[B, C, 2]`。
+- 防止后续 RGB encoder 接入时误以为 SpatialSoftmax 一定输出固定 keypoint 数。
+
+`test_output_shape_with_learnable_keypoint_projection`
+
+- 验证 `num_keypoints=K` 时输出 shape 是 `[B, K, 2]`。
+- 防止 `1x1 Conv2d` projection 后 reshape 仍错误使用原始 channel 数。
+
+`test_uniform_feature_map_returns_grid_center_without_projection`
+
+- 构造全零 feature map。
+- 全零经过 spatial softmax 后是 uniform distribution。
+- 对称网格的期望应接近 `(0, 0)`。
+- 防止坐标网格顺序、flatten 顺序或 softmax 维度写错。
+
+`test_uniform_feature_map_returns_grid_center_with_projection`
+
+- 启用 `num_keypoints=K`。
+- 将 `1x1 Conv2d` weight 和 bias 都置零。
+- 无论输入 features 是什么，projection 输出都是全零 map。
+- 期望输出仍接近 `(0, 0)`。
+- 防止 projection 分支和非 projection 分支数学行为不一致。
+
+`test_dominant_activation_returns_expected_normalized_coordinate`
+
+- 在小网格 `H=3, W=5` 中，把某一个空间位置设为强激活，其余位置设为很小值。
+- 输出坐标应接近该位置在 `[-1, 1]` 网格里的 `(x, y)`。
+- 防止 `x/y` 维度反了、height/width 网格构造反了、flatten 顺序和 grid 顺序不匹配。
+
+`test_position_grid_is_registered_buffer_not_parameter_and_moves_with_module`
+
+- 检查 `pos_grid` 出现在 `named_buffers()`。
+- 检查 `pos_grid` 不出现在 `named_parameters()`。
+- 将 module 移到当前可用 device，确认 buffer 跟随移动。
+- 防止未来误把固定几何 grid 当成 learnable parameter。
+
+`test_gradient_flow_to_features_and_optional_projection`
+
+- 分别覆盖 `num_keypoints=None` 和 `num_keypoints=K`。
+- 对 `out.sum()` 调用 `backward()`。
+- 检查输入 features 有有限梯度。
+- 当存在 `1x1 Conv2d` 时，也检查 projection 参数有有限梯度。
+- 防止后续把 soft-argmax 改成不可导的 hard argmax 或 detach 操作。
+
+`test_invalid_constructor_input_shape_raises_clear_error`
+
+- 覆盖 `input_shape` 长度不是 3。
+- 覆盖 `C/H/W` 为 0 或负数。
+- 防止非法 feature map contract 在初始化时沉默通过。
+
+`test_invalid_constructor_num_keypoints_raises_clear_error`
+
+- 覆盖 `num_keypoints=0` 和负数。
+- 防止创建无意义的 keypoint projection。
+
+`test_forward_rejects_non_4d_input`
+
+- 输入不是 `[B, C, H, W]` 时应报错。
+- 防止训练或 encoder 接入时把 `[C, H, W]` 或其他 rank 的 tensor 静默 reshape。
+
+`test_forward_rejects_channel_mismatch`
+
+- 输入 channel 与 constructor 的 `C` 不一致时应报错。
+- 防止 RGB encoder 输出 channel 变化后未同步更新 SpatialSoftmax input shape。
+
+`test_forward_rejects_height_or_width_mismatch`
+
+- 输入 `H/W` 与 constructor 不一致时应报错。
+- 防止 crop/backbone 输出尺寸变化后 grid 仍使用旧尺寸。
+
+这些测试共同保护后续视觉 encoder 集成：RGB encoder 只要输出 `[B, C, H, W]`，SpatialSoftmax 就会明确验证 shape，并稳定返回 `[B, K, 2]`。
+
+### 6. 与原版实现的区别
+
+数学行为保持一致：
+
+- 都对每个 channel/keypoint map 的 `H * W` 做 softmax。
+- 都用 `[-1, 1]` 坐标网格求 expected xy。
+- 都输出 `[B, K, 2]`。
+- 都支持不投影时 `K=C`，投影时 `K=num_keypoints`。
+
+grid 构造方式变化：
+
+- 原版使用 numpy：
+
+  ```text
+  np.meshgrid(np.linspace(...), np.linspace(...))
+  ```
+
+- 新版使用 PyTorch：
+
+  ```text
+  torch.linspace(...)
+  torch.meshgrid(..., indexing="ij")
+  ```
+
+参数命名变化：
+
+- 原版：`num_kp`
+- 新版：`num_keypoints`
+
+内部模块命名变化：
+
+- 原版 projection 名为 `nets`。
+- 新版 projection 名为 `keypoint_projection`。
+
+是否兼容后续 RGB encoder：
+
+- 兼容。后续 RGB encoder 只需要输出静态 shape `[B, C, H, W]`，并把对应 `(C, H, W)` 传给 `SpatialSoftmax`。
+- 如果 RGB encoder 输出尺寸变化，forward validation 会立刻报错，而不是静默产生错误坐标。
+
+为什么本阶段没有实现 ResNet/RGB encoder：
+
+- SpatialSoftmax 是 RGB encoder 的下游模块。
+- 先验证 SpatialSoftmax，可以把后续 RGB encoder 的测试拆成两个问题：backbone/crop 是否产生正确 feature map，以及 SpatialSoftmax 是否正确压缩 feature map。
+- 如果这两个问题混在一个阶段实现，shape 错误和数学错误会更难定位。
+
+### 7. 当前限制
+
+当前只有 `SpatialSoftmax`。
+
+仍未实现：
+
+- RGB encoder
+- image crop
+- ResNet/backbone wrapper
+- multi-camera encoder 组合逻辑
+- U-Net
+- timestep embedding
+- FiLM residual block
+- scheduler
+- diffusion loss
+- training `forward`
+- sampling
+- action queue
+- `select_action`
+- inference
+- factory/global registry 注册
+
+测试运行状态：
+
+尝试运行：
+
+```text
+python -m pytest tests/policies/diffusion_policy/test_configuration_diffusion_policy.py tests/policies/diffusion_policy/test_processor_diffusion_policy.py tests/policies/diffusion_policy/test_tensor_contract.py tests/policies/diffusion_policy/test_spatial_softmax.py -q
+```
+
+结果：
+
+```text
+/usr/bin/python: No module named pytest
+```
+
+尝试运行：
+
+```text
+uv run python -m pytest tests/policies/diffusion_policy/test_configuration_diffusion_policy.py tests/policies/diffusion_policy/test_processor_diffusion_policy.py tests/policies/diffusion_policy/test_tensor_contract.py tests/policies/diffusion_policy/test_spatial_softmax.py -q
+```
+
+结果：
+
+```text
+snap-confine is packaged without necessary permissions and cannot continue
+required permitted capability cap_dac_override not found in current capabilities:
+  =
+```
+
+compile 检查通过：
+
+```text
+python -m compileall src/lerobot/policies/diffusion_policy tests/policies/diffusion_policy
+```
+
+其中包含：
+
+```text
+Compiling 'src/lerobot/policies/diffusion_policy/spatial_softmax.py'...
+Compiling 'tests/policies/diffusion_policy/test_spatial_softmax.py'...
+```
+
+import smoke test 使用系统 Python 被本地依赖阻塞：
+
+```text
+ModuleNotFoundError: No module named 'torch'
+```
+
+`.venv/bin/python` 的 import smoke test 也被本地依赖阻塞：
+
+```text
+ModuleNotFoundError: No module named 'torch'
+```
+
+因此本阶段 pytest 未完整运行是本地环境问题，不是 SpatialSoftmax 代码逻辑或测试断言失败。
+
+### 8. 下一阶段建议
+
+推荐下一阶段：
+
+```text
+Phase 5 - 从零实现 RGB encoder
+```
+
+原因：
+
+- SpatialSoftmax 已经提供稳定的 feature map 到 keypoint 坐标转换。
+- RGB encoder 的自然输出就是 `[B, C, H, W]` feature map。
+- 下一阶段可以专注实现 image crop、backbone feature extraction 和输出 shape 推断。
+- RGB encoder 接上 SpatialSoftmax 后，可以把视觉输入压缩成 `[B, K * 2]` 或等价的低维视觉特征，再进入后续 state/action 条件模型。

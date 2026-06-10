@@ -249,7 +249,8 @@ Sampling and action output:
   - Status: processor factory and tests added, full pytest pending because of local environment issue: `pytest` and `torch` are missing in available interpreters; `uv run` fails while building `egl-probe`.
 - [x] Phase 3 - Minimal image/state/action tensor contract
   - Status: tensor contract utilities and scoped tests added; full pytest pending because of local environment issue: `pytest`/`torch`/`draccus` are missing in available interpreters, and `uv run` still fails while building `egl-probe`.
-- [ ] Phase 4 - SpatialSoftmax from scratch
+- [x] Phase 4 - SpatialSoftmax from scratch
+  - Status: SpatialSoftmax module and scoped tests added; full pytest pending because of local environment issue: system Python is missing `pytest`/`torch`, `.venv` is missing `torch`, and `uv run` is blocked by `snap-confine` permissions.
 - [ ] Phase 5 - RGB encoder from scratch
 - [ ] Phase 6 - Sinusoidal timestep embedding
 - [ ] Phase 7 - FiLM residual block
