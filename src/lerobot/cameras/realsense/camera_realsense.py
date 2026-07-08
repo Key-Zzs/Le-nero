@@ -124,6 +124,7 @@ class RealSenseCamera(Camera):
         self.fps = config.fps
         self.color_mode = config.color_mode
         self.use_depth = config.use_depth
+        self.use_ir = config.use_ir
         self.warmup_s = config.warmup_s
 
         self.rs_pipeline: rs.pipeline | None = None
@@ -276,10 +277,20 @@ class RealSenseCamera(Camera):
                 rs_config.enable_stream(
                     rs.stream.depth, self.capture_width, self.capture_height, rs.format.z16, self.fps
                 )
+            if self.use_ir:
+                rs_config.enable_stream(
+                    rs.stream.infrared, 1, self.capture_width, self.capture_height, rs.format.y8, self.fps
+                )
+                rs_config.enable_stream(
+                    rs.stream.infrared, 2, self.capture_width, self.capture_height, rs.format.y8, self.fps
+                )
         else:
             rs_config.enable_stream(rs.stream.color)
             if self.use_depth:
                 rs_config.enable_stream(rs.stream.depth)
+            if self.use_ir:
+                rs_config.enable_stream(rs.stream.infrared, 1)
+                rs_config.enable_stream(rs.stream.infrared, 2)
 
     def _configure_capture_settings(self) -> None:
         """Sets fps, width, and height from device stream if not already configured.
@@ -350,6 +361,68 @@ class RealSenseCamera(Camera):
         logger.debug(f"{self} read took: {read_duration_ms:.1f}ms")
 
         return depth_map_processed
+
+    def read_rgbd_ir(
+        self, color_mode: ColorMode | None = None, timeout_ms: int = 200
+    ) -> dict[str, np.ndarray | float | int | bool | None]:
+        """
+        Reads one coherent RealSense frameset and returns native RGB-D/IR data.
+
+        The RGB image is post-processed exactly like :meth:`read`; depth and IR
+        remain native single-channel arrays except for optional rotation.
+        """
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        start_time = time.perf_counter()
+        ret, frameset = self.rs_pipeline.try_wait_for_frames(timeout_ms=timeout_ms)
+
+        if not ret or frameset is None:
+            raise RuntimeError(f"{self} read_rgbd_ir failed (status={ret}).")
+
+        frame = self._frameset_to_rgbd_ir(frameset, color_mode=color_mode)
+
+        read_duration_ms = (time.perf_counter() - start_time) * 1e3
+        logger.debug(f"{self} read_rgbd_ir took: {read_duration_ms:.1f}ms")
+
+        return frame
+
+    def _frameset_to_rgbd_ir(
+        self, frameset: Any, color_mode: ColorMode | None = None
+    ) -> dict[str, np.ndarray | float | int | bool | None]:
+        color_frame = frameset.get_color_frame()
+        if not color_frame:
+            raise RuntimeError(f"{self} read_rgbd_ir failed: missing color frame.")
+
+        rgb_raw = np.asanyarray(color_frame.get_data())
+        frame: dict[str, np.ndarray | float | int | bool | None] = {
+            "rgb": self._postprocess_image(rgb_raw, color_mode),
+            "depth": None,
+            "left_ir": None,
+            "right_ir": None,
+            "timestamp": float(color_frame.get_timestamp()),
+            "frame_index": int(color_frame.get_frame_number()),
+            "reused": False,
+        }
+
+        if self.use_depth:
+            depth_frame = frameset.get_depth_frame()
+            if not depth_frame:
+                raise RuntimeError(f"{self} read_rgbd_ir failed: missing depth frame.")
+            depth_raw = np.asanyarray(depth_frame.get_data())
+            frame["depth"] = self._postprocess_image(depth_raw, depth_frame=True)
+
+        if self.use_ir:
+            left_ir_frame = frameset.get_infrared_frame(1)
+            right_ir_frame = frameset.get_infrared_frame(2)
+            if not left_ir_frame or not right_ir_frame:
+                raise RuntimeError(f"{self} read_rgbd_ir failed: missing left/right IR frame.")
+            left_ir_raw = np.asanyarray(left_ir_frame.get_data())
+            right_ir_raw = np.asanyarray(right_ir_frame.get_data())
+            frame["left_ir"] = self._postprocess_image(left_ir_raw, depth_frame=True)
+            frame["right_ir"] = self._postprocess_image(right_ir_raw, depth_frame=True)
+
+        return frame
 
     def read(self, color_mode: ColorMode | None = None, timeout_ms: int = 200) -> np.ndarray:
         """
@@ -430,7 +503,8 @@ class RealSenseCamera(Camera):
             )
 
         processed_image = image
-        if self.color_mode == ColorMode.BGR:
+        effective_color_mode = color_mode if color_mode is not None else self.color_mode
+        if not depth_frame and effective_color_mode == ColorMode.BGR:
             processed_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
         if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE, cv2.ROTATE_180]:

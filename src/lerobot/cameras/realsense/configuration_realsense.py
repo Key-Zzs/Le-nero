@@ -43,6 +43,7 @@ class RealSenseCameraConfig(CameraConfig):
         serial_number_or_name: Unique serial number or human-readable name to identify the camera.
         color_mode: Color mode for image output (RGB or BGR). Defaults to RGB.
         use_depth: Whether to enable depth stream. Defaults to False.
+        use_ir: Whether to enable left/right infrared streams. Defaults to False.
         rotation: Image rotation setting (0°, 90°, 180°, or 270°). Defaults to no rotation.
         warmup_s: Time reading frames before returning from connect (in seconds)
 
@@ -56,6 +57,7 @@ class RealSenseCameraConfig(CameraConfig):
     serial_number_or_name: str
     color_mode: ColorMode = ColorMode.RGB
     use_depth: bool = False
+    use_ir: bool = False
     rotation: Cv2Rotation = Cv2Rotation.NO_ROTATION
     warmup_s: int = 1
 

@@ -671,14 +671,39 @@ def build_dataset_frame(
     """
     frame = {}
     for key, ft in ds_features.items():
-        if key in DEFAULT_FEATURES or not key.startswith(prefix):
+        if key in DEFAULT_FEATURES:
             continue
-        elif ft["dtype"] == "float32" and len(ft["shape"]) == 1:
+
+        is_prefixed_feature = key.startswith(prefix)
+        is_observation_passthrough = prefix == OBS_STR and key in values
+        if not is_prefixed_feature and not is_observation_passthrough:
+            continue
+
+        if ft["dtype"] == "float32" and len(ft["shape"]) == 1 and ft.get("names") is not None:
             frame[key] = np.array([values[name] for name in ft["names"]], dtype=np.float32)
         elif ft["dtype"] in ["image", "video"]:
             frame[key] = values[key.removeprefix(f"{prefix}.images.")]
+        elif is_observation_passthrough:
+            frame[key] = format_feature_value(key, ft, values[key])
 
     return frame
+
+
+def format_feature_value(name: str, feature: dict[str, Any], value: Any) -> np.ndarray | str:
+    """Format a raw scalar/array value according to a LeRobot feature spec."""
+
+    dtype = feature["dtype"]
+    if dtype == "string":
+        return str(value)
+
+    if not is_valid_numpy_dtype_string(dtype):
+        raise NotImplementedError(f"The feature dtype '{dtype}' is not implemented for '{name}'.")
+
+    expected_shape = tuple(feature["shape"])
+    array = np.asarray(value, dtype=np.dtype(dtype))
+    if expected_shape == (1,) and array.shape == ():
+        array = array.reshape(1)
+    return array
 
 
 def dataset_to_policy_features(features: dict[str, dict]) -> dict[str, PolicyFeature]:
