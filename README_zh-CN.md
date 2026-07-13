@@ -366,10 +366,23 @@ robot-dagger --config scripts/config/dagger_rounds_cfg.yaml
 ### RGB-D/IR sidecar 完整性
 
 RealSense 的彩色、深度和左右 IR 数组在离开相机层前，必须先从 SDK
-管理的帧缓冲区复制到独立内存。RGB 帧随后通过 image/video 路径写入，
-而 depth/IR 数组会一直保存在内存中的 episode buffer，直到 sidecar
-写入 Parquet。因此 dataset 层还会对非图像 NumPy 数组做第二次、有意的
-所有权快照。
+管理的帧缓冲区复制到独立内存。采集包现在默认让新的 Flexiv 录制使用原始
+Zarr v2 sidecar：RGB 保持 LeRobot MP4，state/action/标量同步字段保持在
+Parquet，九个 depth/IR 数组则先独立快照，再进入有界后台 writer，不再进入
+LeRobot episode buffer 或 stats。`rgbd_sidecar_storage: parquet` 保留旧版
+路径，并继续受 dataset 层可变数组快照保护。
+
+新布局增加 `meta/rgbd_sidecar.json` 作为权威 commit ledger，并使用
+`sidecars/realsense.zarr` 保存原始采集数据。数组包括
+`/data/<camera>/{depth,left_ir,right_ir,rgbd_timestamp,rgbd_reused}` 和
+`/meta/{index,episode_index,frame_index,global_frame_index,robot_timestamp,episode_ends}`。
+depth 保持 RealSense 原生 `uint16` 单位，IR 保持无损 `uint8`。只有后台
+writer drain、LeRobot episode 的 Parquet/meta 持久封口且 join 检查成功后，
+manifest 才推进 committed prefix。rerecord 会截去未提交尾部；中断数据保留为
+`incomplete`，resume 遇到 ledger/Parquet/calibration 不一致会直接失败，不会猜测。
+
+这里的 Zarr 是原始传感器存储，不是派生的 DP3 replay-buffer 格式；DP3 point
+cloud 转换仍是后续离线步骤。
 
 每次 RGB-D 采集结束后，都必须在采集包中运行 sidecar 数据检查器；只有
 检查通过后，才能开始 DP3 Zarr 转换：
@@ -377,11 +390,16 @@ RealSense 的彩色、深度和左右 IR 数组在离开相机层前，必须先
 ```bash
 cd dual_arm_data_collection/lerobot_dual_arm_teleop
 python scripts/check_rgbd_sidecar_dataset.py --root /path/to/lerobot/dataset
+python scripts/tools/export_rgbd_sidecar_preview.py \
+  --root /path/to/lerobot/dataset --episode 0 --frame-index 0 --camera head
+python scripts/tools/export_ffs_stereo_pair.py \
+  --root /path/to/lerobot/dataset --episode 0 --frame-index 0 --camera head
 ```
 
 如果旧的原始 LeRobot 数据集已经出现 depth/IR 冻结，重新导出 Zarr 无法
 恢复缺失的真实传感器帧。应保留原数据只读用于诊断，并在确认修复后的采集
-链路通过检查后重新采集。
+链路通过检查后重新采集。进入 DP3 转换或正式采集前，必须先录制新的 smoke
+dataset 并要求 checker 通过。
 
 ## TODO
 

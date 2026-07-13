@@ -362,11 +362,26 @@ Common key controls during collection:
 ### RGB-D/IR sidecar integrity
 
 RealSense color, depth, and left/right IR arrays must be copied out of the
-SDK-owned frame buffer before they leave the camera layer. RGB frames are then
-written through the image/video path, while depth and IR arrays remain in the
-in-memory episode buffer until the Parquet sidecar is saved. The dataset layer
-therefore snapshots non-image NumPy arrays as a second, intentional ownership
-boundary.
+SDK-owned frame buffer before they leave the camera layer. The collection
+package now defaults new Flexiv recordings to a raw Zarr v2 sidecar: RGB stays
+in LeRobot MP4, scalar state/action/sync fields stay in Parquet, and the nine
+depth/IR arrays are snapshotted into a bounded background writer instead of the
+LeRobot episode buffer or statistics. `rgbd_sidecar_storage: parquet` retains
+the legacy path and still benefits from the dataset-level mutable-array
+snapshot boundary.
+
+The new layout adds `meta/rgbd_sidecar.json` as the authoritative commit ledger
+and `sidecars/realsense.zarr` as the raw acquisition store. It contains
+`/data/<camera>/{depth,left_ir,right_ir,rgbd_timestamp,rgbd_reused}` and
+`/meta/{index,episode_index,frame_index,global_frame_index,robot_timestamp,episode_ends}`.
+Native depth remains `uint16` RealSense units and IR remains lossless `uint8`.
+The manifest committed prefix is advanced only after the writer drains and the
+LeRobot episode Parquet/meta files are durably sealed and join-checked. Rerecord
+truncates the uncommitted tail; interrupted data remains `incomplete`, and
+resume refuses ledger/Parquet/calibration disagreements rather than guessing.
+
+This Zarr is raw sensor storage, not the derived DP3 replay-buffer format. DP3
+point-cloud conversion remains a later offline step.
 
 After every RGB-D recording, run the sidecar dataset checker from the collection
 package and require it to pass before starting any DP3 Zarr conversion:
@@ -374,12 +389,17 @@ package and require it to pass before starting any DP3 Zarr conversion:
 ```bash
 cd dual_arm_data_collection/lerobot_dual_arm_teleop
 python scripts/check_rgbd_sidecar_dataset.py --root /path/to/lerobot/dataset
+python scripts/tools/export_rgbd_sidecar_preview.py \
+  --root /path/to/lerobot/dataset --episode 0 --frame-index 0 --camera head
+python scripts/tools/export_ffs_stereo_pair.py \
+  --root /path/to/lerobot/dataset --episode 0 --frame-index 0 --camera head
 ```
 
 If an older raw LeRobot dataset already contains frozen depth/IR arrays,
 re-exporting its Zarr cannot recover the missing sensor frames. Keep that dataset
 read-only for diagnosis and collect a new recording after validating the fixed
-capture stack.
+capture stack. Always make a new smoke recording and require the checker to
+pass before any DP3 conversion or formal collection.
 
 ## TODO
 

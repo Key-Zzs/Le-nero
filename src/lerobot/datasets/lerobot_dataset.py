@@ -95,6 +95,7 @@ class LeRobotDatasetMetadata:
         self.latest_episode = None
         self.metadata_buffer: list[dict] = []
         self.metadata_buffer_size = metadata_buffer_size
+        self._writer_closed_for_reading = False
 
         try:
             if force_cache_sync:
@@ -372,11 +373,15 @@ class LeRobotDatasetMetadata:
 
                 av_size_per_frame = latest_size_in_mb / latest_num_frames if latest_num_frames > 0 else 0.0
 
-                if latest_size_in_mb + av_size_per_frame * num_frames >= self.data_files_size_in_mb:
+                if (
+                    latest_size_in_mb + av_size_per_frame * num_frames >= self.data_files_size_in_mb
+                    or self._writer_closed_for_reading
+                ):
                     # Size limit is reached, flush buffer and prepare new parquet file
                     self._flush_metadata_buffer()
                     chunk_idx, file_idx = update_chunk_file_indices(chunk_idx, file_idx, self.chunks_size)
                     self._close_writer()
+                    self._writer_closed_for_reading = False
 
             # Update the existing pandas dataframe with new row
             episode_dict["meta/episodes/chunk_index"] = [chunk_idx]
@@ -538,6 +543,7 @@ class LeRobotDatasetMetadata:
         obj.latest_episode = None
         obj.metadata_buffer = []
         obj.metadata_buffer_size = metadata_buffer_size
+        obj._writer_closed_for_reading = False
         return obj
 
 
@@ -1017,6 +1023,20 @@ class LeRobotDataset(torch.utils.data.Dataset):
         """
         self._close_writer()
         self.meta._close_writer()
+
+    def seal_episode_writers(self) -> None:
+        """Close current Parquet files and force the next episode into new files.
+
+        This makes a just-saved episode immediately readable and durable enough
+        for an external transactional sink to verify before advancing its own
+        commit ledger. It also prevents a later ParquetWriter from reopening and
+        truncating a sealed file.
+        """
+
+        self._close_writer()
+        self._writer_closed_for_reading = True
+        self.meta._close_writer()
+        self.meta._writer_closed_for_reading = True
 
     def create_episode_buffer(self, episode_index: int | None = None) -> dict:
         current_ep_idx = self.meta.total_episodes if episode_index is None else episode_index

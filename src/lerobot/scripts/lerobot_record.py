@@ -256,6 +256,7 @@ def record_loop(
     control_time_s: int | None = None,
     single_task: str | None = None,
     display_data: bool = False,
+    frame_sink: Any | None = None,
 ):
     if dataset is not None and dataset.fps != fps:
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
@@ -358,6 +359,11 @@ def record_loop(
         if dataset is not None:
             action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
             frame = {**observation_frame, **action_frame, "task": single_task}
+            if frame_sink is not None:
+                # Optional acquisition-specific storage can snapshot raw observation
+                # values exactly once, adjacent to the corresponding dataset row,
+                # without adding device-specific fields to LeRobotDataset.
+                frame_sink.add_frame(observation=obs, frame=frame)
             dataset.add_frame(frame)
 
         if display_data:
