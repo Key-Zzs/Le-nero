@@ -39,6 +39,12 @@ from .configuration_realsense import RealSenseCameraConfig
 logger = logging.getLogger(__name__)
 
 
+def _copy_frame_data(rs_frame: Any) -> np.ndarray:
+    """Copy an SDK-owned frame buffer into contiguous NumPy-owned memory."""
+
+    return np.array(np.asanyarray(rs_frame.get_data()), copy=True, order="C")
+
+
 class RealSenseCamera(Camera):
     """
     Manages interactions with Intel RealSense cameras for frame and depth recording.
@@ -353,7 +359,7 @@ class RealSenseCamera(Camera):
             raise RuntimeError(f"{self} read_depth failed (status={ret}).")
 
         depth_frame = frame.get_depth_frame()
-        depth_map = np.asanyarray(depth_frame.get_data())
+        depth_map = _copy_frame_data(depth_frame)
 
         depth_map_processed = self._postprocess_image(depth_map, depth_frame=True)
 
@@ -394,7 +400,7 @@ class RealSenseCamera(Camera):
         if not color_frame:
             raise RuntimeError(f"{self} read_rgbd_ir failed: missing color frame.")
 
-        rgb_raw = np.asanyarray(color_frame.get_data())
+        rgb_raw = _copy_frame_data(color_frame)
         frame: dict[str, np.ndarray | float | int | bool | None] = {
             "rgb": self._postprocess_image(rgb_raw, color_mode),
             "depth": None,
@@ -409,7 +415,7 @@ class RealSenseCamera(Camera):
             depth_frame = frameset.get_depth_frame()
             if not depth_frame:
                 raise RuntimeError(f"{self} read_rgbd_ir failed: missing depth frame.")
-            depth_raw = np.asanyarray(depth_frame.get_data())
+            depth_raw = _copy_frame_data(depth_frame)
             frame["depth"] = self._postprocess_image(depth_raw, depth_frame=True)
 
         if self.use_ir:
@@ -417,8 +423,8 @@ class RealSenseCamera(Camera):
             right_ir_frame = frameset.get_infrared_frame(2)
             if not left_ir_frame or not right_ir_frame:
                 raise RuntimeError(f"{self} read_rgbd_ir failed: missing left/right IR frame.")
-            left_ir_raw = np.asanyarray(left_ir_frame.get_data())
-            right_ir_raw = np.asanyarray(right_ir_frame.get_data())
+            left_ir_raw = _copy_frame_data(left_ir_frame)
+            right_ir_raw = _copy_frame_data(right_ir_frame)
             frame["left_ir"] = self._postprocess_image(left_ir_raw, depth_frame=True)
             frame["right_ir"] = self._postprocess_image(right_ir_raw, depth_frame=True)
 
@@ -455,7 +461,7 @@ class RealSenseCamera(Camera):
             raise RuntimeError(f"{self} read failed (status={ret}).")
 
         color_frame = frame.get_color_frame()
-        color_image_raw = np.asanyarray(color_frame.get_data())
+        color_image_raw = _copy_frame_data(color_frame)
 
         color_image_processed = self._postprocess_image(color_image_raw, color_mode)
 

@@ -1084,7 +1084,14 @@ class LeRobotDataset(torch.utils.data.Dataset):
                 self._save_image(frame[key], img_path)
                 self.episode_buffer[key].append(str(img_path))
             else:
-                self.episode_buffer[key].append(frame[key])
+                # Episode data may remain buffered until the episode ends. Snapshot
+                # mutable arrays so later producer/SDK buffer reuse cannot rewrite
+                # previously recorded frames. Strings and scalar values are immutable
+                # and intentionally pass through unchanged.
+                value = frame[key]
+                if isinstance(value, np.ndarray):
+                    value = np.array(value, copy=True, order="C")
+                self.episode_buffer[key].append(value)
 
         self.episode_buffer["size"] += 1
 

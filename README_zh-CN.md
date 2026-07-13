@@ -363,6 +363,26 @@ robot-dagger --config scripts/config/dagger_rounds_cfg.yaml
 - Enter：继续下一段遥操作或下一条 episode。
 - Ctrl+C：中断并清理未完成数据集。
 
+### RGB-D/IR sidecar 完整性
+
+RealSense 的彩色、深度和左右 IR 数组在离开相机层前，必须先从 SDK
+管理的帧缓冲区复制到独立内存。RGB 帧随后通过 image/video 路径写入，
+而 depth/IR 数组会一直保存在内存中的 episode buffer，直到 sidecar
+写入 Parquet。因此 dataset 层还会对非图像 NumPy 数组做第二次、有意的
+所有权快照。
+
+每次 RGB-D 采集结束后，都必须在采集包中运行 sidecar 数据检查器；只有
+检查通过后，才能开始 DP3 Zarr 转换：
+
+```bash
+cd dual_arm_data_collection/lerobot_dual_arm_teleop
+python scripts/check_rgbd_sidecar_dataset.py --root /path/to/lerobot/dataset
+```
+
+如果旧的原始 LeRobot 数据集已经出现 depth/IR 冻结，重新导出 Zarr 无法
+恢复缺失的真实传感器帧。应保留原数据只读用于诊断，并在确认修复后的采集
+链路通过检查后重新采集。
+
 ## TODO
 
 ### 夹爪开合关键帧加权训练 TODO

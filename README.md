@@ -359,6 +359,28 @@ Common key controls during collection:
 - Enter: continue to the next teleoperation segment or next episode.
 - Ctrl+C: interrupt and clean up the incomplete dataset.
 
+### RGB-D/IR sidecar integrity
+
+RealSense color, depth, and left/right IR arrays must be copied out of the
+SDK-owned frame buffer before they leave the camera layer. RGB frames are then
+written through the image/video path, while depth and IR arrays remain in the
+in-memory episode buffer until the Parquet sidecar is saved. The dataset layer
+therefore snapshots non-image NumPy arrays as a second, intentional ownership
+boundary.
+
+After every RGB-D recording, run the sidecar dataset checker from the collection
+package and require it to pass before starting any DP3 Zarr conversion:
+
+```bash
+cd dual_arm_data_collection/lerobot_dual_arm_teleop
+python scripts/check_rgbd_sidecar_dataset.py --root /path/to/lerobot/dataset
+```
+
+If an older raw LeRobot dataset already contains frozen depth/IR arrays,
+re-exporting its Zarr cannot recover the missing sensor frames. Keep that dataset
+read-only for diagnosis and collect a new recording after validating the fixed
+capture stack.
+
 ## TODO
 
 ### Gripper Transition Keyframe Weighting TODO

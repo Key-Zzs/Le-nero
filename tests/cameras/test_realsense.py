@@ -25,7 +25,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from lerobot.cameras.configs import Cv2Rotation
+from lerobot.cameras.configs import ColorMode, Cv2Rotation
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 pytest.importorskip("pyrealsense2")
@@ -34,6 +34,41 @@ from lerobot.cameras.realsense import RealSenseCamera, RealSenseCameraConfig
 
 TEST_ARTIFACTS_DIR = Path(__file__).parent.parent / "artifacts" / "cameras"
 BAG_FILE_PATH = TEST_ARTIFACTS_DIR / "test_rs.bag"
+
+
+class _FakeFrame:
+    def __init__(self, data: np.ndarray, *, timestamp: float = 123.0, frame_number: int = 7):
+        self.data = data
+        self.timestamp = timestamp
+        self.frame_number = frame_number
+
+    def get_data(self) -> np.ndarray:
+        return self.data
+
+    def get_timestamp(self) -> float:
+        return self.timestamp
+
+    def get_frame_number(self) -> int:
+        return self.frame_number
+
+    def __bool__(self) -> bool:
+        return True
+
+
+class _FakeFrameset:
+    def __init__(self, rgb: np.ndarray, depth: np.ndarray, left_ir: np.ndarray, right_ir: np.ndarray):
+        self.color = _FakeFrame(rgb)
+        self.depth = _FakeFrame(depth)
+        self.ir = {1: _FakeFrame(left_ir), 2: _FakeFrame(right_ir)}
+
+    def get_color_frame(self) -> _FakeFrame:
+        return self.color
+
+    def get_depth_frame(self) -> _FakeFrame:
+        return self.depth
+
+    def get_infrared_frame(self, index: int) -> _FakeFrame:
+        return self.ir[index]
 
 # NOTE(Steven): For some reason these tests take ~20sec in macOS but only ~2sec in Linux.
 
@@ -102,6 +137,75 @@ def test_read():
 
     img = camera.read()
     assert isinstance(img, np.ndarray)
+
+
+def test_rgbd_ir_frames_detach_from_sdk_buffers():
+    height, width = 3, 4
+    sources = {
+        "rgb": np.arange(height * width * 3, dtype=np.uint8).reshape(height, width, 3),
+        "depth": np.arange(height * width, dtype=np.uint16).reshape(height, width),
+        "left_ir": np.arange(height * width, dtype=np.uint8).reshape(height, width),
+        "right_ir": np.arange(height * width, dtype=np.uint8).reshape(height, width) + 20,
+    }
+    expected = {name: value.copy() for name, value in sources.items()}
+    frameset = _FakeFrameset(**sources)
+    camera = RealSenseCamera(
+        RealSenseCameraConfig(
+            serial_number_or_name="042",
+            fps=30,
+            width=width,
+            height=height,
+            use_depth=True,
+            use_ir=True,
+        )
+    )
+
+    result = camera._frameset_to_rgbd_ir(frameset)
+    for source in sources.values():
+        source[...] = 0
+
+    for name, original in expected.items():
+        actual = result[name]
+        assert isinstance(actual, np.ndarray)
+        np.testing.assert_array_equal(actual, original)
+        assert actual.dtype == original.dtype
+        assert actual.shape == original.shape
+        assert actual.flags.c_contiguous
+        assert actual.flags.owndata
+
+
+def test_rgbd_ir_frame_copy_preserves_color_and_rotation_semantics():
+    capture_height, capture_width = 3, 4
+    rgb = np.arange(capture_height * capture_width * 3, dtype=np.uint8).reshape(
+        capture_height, capture_width, 3
+    )
+    depth = np.arange(capture_height * capture_width, dtype=np.uint16).reshape(
+        capture_height, capture_width
+    )
+    left_ir = np.arange(capture_height * capture_width, dtype=np.uint8).reshape(
+        capture_height, capture_width
+    )
+    right_ir = left_ir + 20
+    frameset = _FakeFrameset(rgb, depth, left_ir, right_ir)
+    camera = RealSenseCamera(
+        RealSenseCameraConfig(
+            serial_number_or_name="042",
+            color_mode=ColorMode.BGR,
+            rotation=Cv2Rotation.ROTATE_90,
+            fps=30,
+            width=capture_height,
+            height=capture_width,
+            use_depth=True,
+            use_ir=True,
+        )
+    )
+
+    result = camera._frameset_to_rgbd_ir(frameset)
+
+    np.testing.assert_array_equal(result["rgb"], np.rot90(rgb[..., ::-1], k=-1))
+    np.testing.assert_array_equal(result["depth"], np.rot90(depth, k=-1))
+    np.testing.assert_array_equal(result["left_ir"], np.rot90(left_ir, k=-1))
+    np.testing.assert_array_equal(result["right_ir"], np.rot90(right_ir, k=-1))
 
 
 # TODO(Steven): Fix this test for the latest version of pyrealsense2.
