@@ -224,3 +224,30 @@ def test_log_rerun_data_kwargs_only(mock_rerun):
     a = _obj_for(calls, "action.a")
     assert type(a).__name__ == "DummyScalar"
     assert a.value == pytest.approx(1.0)
+
+
+def test_log_rerun_data_records_all_v3_force_observation_scalars(mock_rerun):
+    vu, calls = mock_rerun
+    force_names = [
+        "left_ee_ext_wrench_in_tcp_raw.fx",
+        "left_ee_ext_wrench_in_tcp_raw.fy",
+        "left_ee_ext_wrench_in_tcp_raw.fz",
+        "left_ee_ext_wrench_in_tcp_raw.mx",
+        "left_ee_ext_wrench_in_tcp_raw.my",
+        "left_ee_ext_wrench_in_tcp_raw.mz",
+        "left_gripper_force",
+        "right_ee_ext_wrench_in_tcp_raw.fx",
+        "right_ee_ext_wrench_in_tcp_raw.fy",
+        "right_ee_ext_wrench_in_tcp_raw.fz",
+        "right_ee_ext_wrench_in_tcp_raw.mx",
+        "right_ee_ext_wrench_in_tcp_raw.my",
+        "right_ee_ext_wrench_in_tcp_raw.mz",
+        "right_gripper_force",
+    ]
+    observation = {name: float(index - 7) for index, name in enumerate(force_names)}
+
+    vu.log_rerun_data(observation=observation)
+
+    assert set(_keys(calls)) == {f"observation.{name}" for name in force_names}
+    assert _obj_for(calls, "observation.left_gripper_force").value == pytest.approx(-1.0)
+    assert _obj_for(calls, "observation.right_gripper_force").value == pytest.approx(6.0)

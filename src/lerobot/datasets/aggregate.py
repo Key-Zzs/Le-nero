@@ -16,6 +16,7 @@
 # limitations under the License.
 
 import logging
+import copy
 import shutil
 from pathlib import Path
 
@@ -210,6 +211,30 @@ def aggregate_datasets(
         ]
     )
     fps, robot_type, features = validate_all_metadata(all_metadata)
+    if robot_type == "flexiv_dual_arm":
+        schemas = [meta.info.get("robot_state_schema") for meta in all_metadata]
+        if not isinstance(schemas[0], dict):
+            raise ValueError(
+                "Flexiv aggregation requires robot_state_schema metadata; "
+                "legacy v2/34D and v1/28D datasets cannot be aggregated into v3."
+            )
+        if any(schema != schemas[0] for schema in schemas[1:]):
+            raise ValueError("Flexiv aggregation requires identical robot_state_schema metadata.")
+        state_feature = features.get("observation.state", {})
+        action_feature = features.get("action", {})
+        if tuple(state_feature.get("shape", ())) != (int(schemas[0].get("state_dim", -1)),):
+            raise ValueError("Flexiv aggregation state feature shape disagrees with robot_state_schema.")
+        if list(state_feature.get("names", [])) != list(schemas[0].get("state_names", [])):
+            raise ValueError("Flexiv aggregation state feature names disagree with robot_state_schema.")
+        if tuple(action_feature.get("shape", ())) != (int(schemas[0].get("action_dim", -1)),):
+            raise ValueError("Flexiv aggregation action feature shape disagrees with robot_state_schema.")
+        if list(action_feature.get("names", [])) != list(schemas[0].get("action_names", [])):
+            raise ValueError("Flexiv aggregation action feature names disagree with robot_state_schema.")
+        if schemas[0].get("state_schema") != "flexiv_abs_rot6d_raw_force_v3" or schemas[0].get("state_dim") != 48:
+            raise ValueError(
+                "Flexiv aggregation accepts only flexiv_abs_rot6d_raw_force_v3 with state_dim=48; "
+                "legacy v2/34D and v1/28D datasets are rejected."
+            )
     video_keys = [key for key in features if features[key]["dtype"] == "video"]
 
     dst_meta = LeRobotDatasetMetadata.create(
@@ -223,6 +248,8 @@ def aggregate_datasets(
         data_files_size_in_mb=data_files_size_in_mb,
         video_files_size_in_mb=video_files_size_in_mb,
     )
+    if robot_type == "flexiv_dual_arm":
+        dst_meta.info["robot_state_schema"] = copy.deepcopy(all_metadata[0].info["robot_state_schema"])
 
     logging.info("Find all tasks")
     unique_tasks = pd.concat([m.tasks for m in all_metadata]).index.unique()
