@@ -1,0 +1,11 @@
+# Paper A Stage 1 is read-only. The raw_root must point at the existing
+# LeRobot cache; the audit and preview tools never write below raw_root.
+paper_a_stage1:
+  raw_root: /home/deepcybo/.cache/huggingface/lerobot/flexiv_dual_arm_3d
+  chunk_frames: 16
+  samples_per_episode: 5
+  output_root: outputs/paper_a/stage1_previews
+  tracker_feasibility_status: HUMAN_REVIEW_REQUIRED
+  phase_labels: NOT_GENERATED
+  stage2_models: NOT_RUN
+

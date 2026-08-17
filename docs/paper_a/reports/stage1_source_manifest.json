@@ -1,0 +1,691 @@
+{
+  "datasets": [
+    {
+      "dataset_root": "/home/deepcybo/.cache/huggingface/lerobot/flexiv_dual_arm_3d/pick_place_20260713_v05",
+      "files": [
+        {
+          "bytes": 98484,
+          "kind": "parquet_payload",
+          "mtime_ns": 1783954800289526703,
+          "path": "data/chunk-000/file-000.parquet",
+          "sha256": "e05219c876065d3e668815841a976e03e6a769de58023e6cedc4d3a6170a161b"
+        },
+        {
+          "bytes": 96925,
+          "kind": "parquet_payload",
+          "mtime_ns": 1783954834497528078,
+          "path": "data/chunk-000/file-001.parquet",
+          "sha256": "e8546c7360707c31fa5e6e599bb3621ccc09f95058bcd15986bc79e419f9f702"
+        },
+        {
+          "bytes": 98637,
+          "kind": "parquet_payload",
+          "mtime_ns": 1783954870443529523,
+          "path": "data/chunk-000/file-002.parquet",
+          "sha256": "36d543b08a82d3e326bec74d60758d31802d3174202195a24d967e5e424605ec"
+        },
+        {
+          "bytes": 98797,
+          "kind": "parquet_payload",
+          "mtime_ns": 1783954906024530954,
+          "path": "data/chunk-000/file-003.parquet",
+          "sha256": "3719f5faf10ba9b541bdc9aed338cf156a42874c468f962cfc12837f4e495fff"
+        },
+        {
+          "bytes": 95863,
+          "kind": "parquet_payload",
+          "mtime_ns": 1783954970993533565,
+          "path": "data/chunk-000/file-004.parquet",
+          "sha256": "17369c0cd12f96bdb8894c034e35df8bc40f96d42cfa642b856d722cb333ae0f"
+        },
+        {
+          "bytes": 92200,
+          "kind": "parquet_payload",
+          "mtime_ns": 1783955005957534971,
+          "path": "data/chunk-000/file-005.parquet",
+          "sha256": "b6d156df4302ab5b7f89aadd1818512bb1b5e7c14a43491376e78638e3c0b945"
+        },
+        {
+          "bytes": 107770,
+          "kind": "parquet_payload",
+          "mtime_ns": 1783955045460536558,
+          "path": "data/chunk-000/file-006.parquet",
+          "sha256": "9be61795f860d18043b42627d68048b72f38bbdc30b7c5fd2b662507a8207de0"
+        },
+        {
+          "bytes": 119074,
+          "kind": "parquet_payload",
+          "mtime_ns": 1783955085054538150,
+          "path": "data/chunk-000/file-007.parquet",
+          "sha256": "02c4776f40d6a28b64875d67f365c0774f484cb23d57fa9ce15656e811568d0c"
+        },
+        {
+          "bytes": 93448,
+          "kind": "parquet_payload",
+          "mtime_ns": 1783955122871539670,
+          "path": "data/chunk-000/file-008.parquet",
+          "sha256": "0a5ab2fe949b7c83c7c37a6bd497550996bfe636ffef6007da239f018ac87119"
+        },
+        {
+          "bytes": 97523,
+          "kind": "parquet_payload",
+          "mtime_ns": 1783955158129541087,
+          "path": "data/chunk-000/file-009.parquet",
+          "sha256": "5b84569e41183e02355cc57a9d0afa87067d81bfac3118e2ec0018956f4c5040"
+        },
+        {
+          "bytes": 9486,
+          "kind": "metadata",
+          "mtime_ns": 1783954771776525557,
+          "path": "meta/calibration/realsense_344522070241.json",
+          "sha256": "d89d2e18327abda1341193e2114d625eac24fb65d65a27ad11e33879c27210c9"
+        },
+        {
+          "bytes": 9426,
+          "kind": "metadata",
+          "mtime_ns": 1783954771775525557,
+          "path": "meta/calibration/realsense_346522076690.json",
+          "sha256": "fb0e30e4b64ac474fb8a41ff542e1e1eae3f17f1f6f4c4bcc6aef1b924f37b21"
+        },
+        {
+          "bytes": 9462,
+          "kind": "metadata",
+          "mtime_ns": 1783954771775525557,
+          "path": "meta/calibration/realsense_347622074728.json",
+          "sha256": "971b88d7d5ea519c7725590d236373e780158db9d50a74a24296e9a3f56c9dd1"
+        },
+        {
+          "bytes": 102461,
+          "kind": "metadata",
+          "mtime_ns": 1783954800290526703,
+          "path": "meta/episodes/chunk-000/file-000.parquet",
+          "sha256": "8274712ddddedf7cbd7339460aa0edac50639d2d2c83909b5825334fcb7aa348"
+        },
+        {
+          "bytes": 102463,
+          "kind": "metadata",
+          "mtime_ns": 1783954834497528078,
+          "path": "meta/episodes/chunk-000/file-001.parquet",
+          "sha256": "33d2a3c90802a02a5c4b856c11ee3a63ba6ade4c41ae20660dc2001f9cf83fda"
+        },
+        {
+          "bytes": 102457,
+          "kind": "metadata",
+          "mtime_ns": 1783954870444529523,
+          "path": "meta/episodes/chunk-000/file-002.parquet",
+          "sha256": "085884b67ccfc9913fe58ef92ab84f90ed6292512cafec7d12a6e47cc382a823"
+        },
+        {
+          "bytes": 102471,
+          "kind": "metadata",
+          "mtime_ns": 1783954906025530954,
+          "path": "meta/episodes/chunk-000/file-003.parquet",
+          "sha256": "de9e865f51628ae3bc9e384dc6bb0471bdcdb643a8044f5a38d1c27bca448c33"
+        },
+        {
+          "bytes": 102476,
+          "kind": "metadata",
+          "mtime_ns": 1783954970993533565,
+          "path": "meta/episodes/chunk-000/file-004.parquet",
+          "sha256": "9872e4d0cb3bfa273febaf8aaedf1d6f9802acbfb71f34434d4730f49d77466b"
+        },
+        {
+          "bytes": 102472,
+          "kind": "metadata",
+          "mtime_ns": 1783955005957534971,
+          "path": "meta/episodes/chunk-000/file-005.parquet",
+          "sha256": "8e14de4d912e58d5972430fca9f2467af942a32448d7e83a8214e4b91125b0a5"
+        },
+        {
+          "bytes": 102483,
+          "kind": "metadata",
+          "mtime_ns": 1783955045460536558,
+          "path": "meta/episodes/chunk-000/file-006.parquet",
+          "sha256": "8ca1b98dc5b6cbd3e3d03592c6593397ddc5cbff0bde9f7622eb64a8677f3dde"
+        },
+        {
+          "bytes": 102393,
+          "kind": "metadata",
+          "mtime_ns": 1783955085054538150,
+          "path": "meta/episodes/chunk-000/file-007.parquet",
+          "sha256": "ca6ed891a4f839e0abcabf6a22a748a5ca75f40df64d0d468dec53ff4ddd37b9"
+        },
+        {
+          "bytes": 102480,
+          "kind": "metadata",
+          "mtime_ns": 1783955122872539670,
+          "path": "meta/episodes/chunk-000/file-008.parquet",
+          "sha256": "46deb0a046b169aca4a2c12aa0595089db928974fca086879fb64f8e6fa7a1b5"
+        },
+        {
+          "bytes": 102405,
+          "kind": "metadata",
+          "mtime_ns": 1783955158129541087,
+          "path": "meta/episodes/chunk-000/file-009.parquet",
+          "sha256": "e225ea179a8854266e50ea352c19c9d924b7d40a993b874b464de4405c25b289"
+        },
+        {
+          "bytes": 6324,
+          "kind": "metadata",
+          "mtime_ns": 1783955158127541087,
+          "path": "meta/info.json",
+          "sha256": "c42c8f00078f55a39f1ac9360965d32a3d50565d680b5fd3da4c038ad639ac06"
+        },
+        {
+          "bytes": 35115,
+          "kind": "metadata",
+          "mtime_ns": 1783954771776525557,
+          "path": "meta/realsense_calibration.json",
+          "sha256": "d0622962bd5c83fa0d767395f6f0ee8ae17710c04185c8b3029bb0f5c6ca07ba"
+        },
+        {
+          "bytes": 7865,
+          "kind": "metadata",
+          "mtime_ns": 1783955176016541806,
+          "path": "meta/rgbd_sidecar.json",
+          "sha256": "4dd1fcbf6339f15e03731bb83916b131828969b4c30fedfca9e3c8dabfad51ec"
+        },
+        {
+          "bytes": 29674,
+          "kind": "metadata",
+          "mtime_ns": 1783955158128541087,
+          "path": "meta/stats.json",
+          "sha256": "1fd6759e8baf9d6c5a43a6382a726fd71bdff3b480f405a39a2fd2a43bc6a6b1"
+        },
+        {
+          "bytes": 2361,
+          "kind": "metadata",
+          "mtime_ns": 1783954789841526283,
+          "path": "meta/tasks.parquet",
+          "sha256": "0f4b7e0ddb96068bbb7e70fb964b9b888a124eaf07a2252bbc5dacf0d5b4f453"
+        },
+        {
+          "bytes": 85142269,
+          "kind": "video_payload",
+          "mtime_ns": 1783955158111541087,
+          "path": "videos/observation.images.head_rgb/chunk-000/file-000.mp4",
+          "sha256": "13bc34e0c5b5444cc6350050c393f67cc328d7ed0f5f83144694e4393a07f83f"
+        },
+        {
+          "bytes": 29920649,
+          "kind": "video_payload",
+          "mtime_ns": 1783955152811540874,
+          "path": "videos/observation.images.left_wrist_rgb/chunk-000/file-000.mp4",
+          "sha256": "35d89a15bea07be1aa61cec7b862b8ea37088fc8d5f5296b9600c5a13e18958e"
+        },
+        {
+          "bytes": 33049443,
+          "kind": "video_payload",
+          "mtime_ns": 1783955155366540976,
+          "path": "videos/observation.images.right_wrist_rgb/chunk-000/file-000.mp4",
+          "sha256": "53614174930db2e838958e31a652548dcbd212b7cd3ce67306905f840f5fd5a5"
+        }
+      ],
+      "hash_policy": "SHA-256 metadata, Parquet, Zarr schema, and video files; Zarr frame chunks are inventory-only",
+      "manifest_hash": "fe5298c450b6150c5298f65b1a3ca65af8c4c27b48a39f278dca6dcdb05902be",
+      "raw_sidecar_chunk_summary": {
+        "bytes": 9193884815,
+        "directories": {
+          "sidecars/realsense.zarr": {
+            "bytes": 177,
+            "files": 2
+          },
+          "sidecars/realsense.zarr/data": {
+            "bytes": 24,
+            "files": 1
+          },
+          "sidecars/realsense.zarr/data/head": {
+            "bytes": 24,
+            "files": 1
+          },
+          "sidecars/realsense.zarr/data/head/depth": {
+            "bytes": 917681139,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/data/head/left_ir": {
+            "bytes": 1178228899,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/data/head/rgbd_reused": {
+            "bytes": 12996,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/data/head/rgbd_timestamp": {
+            "bytes": 42506,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/data/head/right_ir": {
+            "bytes": 1168533651,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/data/left_wrist": {
+            "bytes": 24,
+            "files": 1
+          },
+          "sidecars/realsense.zarr/data/left_wrist/depth": {
+            "bytes": 597711845,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/data/left_wrist/left_ir": {
+            "bytes": 1217691902,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/data/left_wrist/rgbd_reused": {
+            "bytes": 12996,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/data/left_wrist/rgbd_timestamp": {
+            "bytes": 42506,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/data/left_wrist/right_ir": {
+            "bytes": 1218204469,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/data/right_wrist": {
+            "bytes": 24,
+            "files": 1
+          },
+          "sidecars/realsense.zarr/data/right_wrist/depth": {
+            "bytes": 466345118,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/data/right_wrist/left_ir": {
+            "bytes": 1220227571,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/data/right_wrist/rgbd_reused": {
+            "bytes": 12996,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/data/right_wrist/rgbd_timestamp": {
+            "bytes": 42506,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/data/right_wrist/right_ir": {
+            "bytes": 1208880332,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/meta": {
+            "bytes": 24,
+            "files": 1
+          },
+          "sidecars/realsense.zarr/meta/episode_ends": {
+            "bytes": 564,
+            "files": 2
+          },
+          "sidecars/realsense.zarr/meta/episode_index": {
+            "bytes": 42504,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/meta/frame_index": {
+            "bytes": 42504,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/meta/global_frame_index": {
+            "bytes": 42504,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/meta/index": {
+            "bytes": 42504,
+            "files": 528
+          },
+          "sidecars/realsense.zarr/meta/robot_timestamp": {
+            "bytes": 42506,
+            "files": 528
+          }
+        },
+        "files": 10569
+      },
+      "total_bytes": 9344130171,
+      "total_files": 31,
+      "total_files_including_raw_chunks": 10600
+    },
+    {
+      "dataset_root": "/home/deepcybo/.cache/huggingface/lerobot/flexiv_dual_arm_3d/pick_place_20260717_v01",
+      "files": [
+        {
+          "bytes": 177132,
+          "kind": "parquet_payload",
+          "mtime_ns": 1784253570680134372,
+          "path": "data/chunk-000/file-000.parquet",
+          "sha256": "d0278ca7b0f75ffe2f1222bbd621590cde211b8ba58c69aa3720000d92b1bddf"
+        },
+        {
+          "bytes": 136066,
+          "kind": "parquet_payload",
+          "mtime_ns": 1784253613076136076,
+          "path": "data/chunk-000/file-001.parquet",
+          "sha256": "67d88c917e4fe6d5bfccef7aa2efdec4f3f4f78f4fa4db37c0c94bf00d7d588c"
+        },
+        {
+          "bytes": 140950,
+          "kind": "parquet_payload",
+          "mtime_ns": 1784253660713137991,
+          "path": "data/chunk-000/file-002.parquet",
+          "sha256": "b689b56506ba3ad5349043c5c899058230e92365edf86b27f6cbd8f7734f29cc"
+        },
+        {
+          "bytes": 104079,
+          "kind": "parquet_payload",
+          "mtime_ns": 1784253699704139558,
+          "path": "data/chunk-000/file-003.parquet",
+          "sha256": "55668484f20883b10f9b72f124bf5e341855bbc8da84577240c88bc344db36cb"
+        },
+        {
+          "bytes": 153053,
+          "kind": "parquet_payload",
+          "mtime_ns": 1784253744763141369,
+          "path": "data/chunk-000/file-004.parquet",
+          "sha256": "1bef28939165a74c4e6f2952e8518b819c54a2aff7577c5dd48bc0e3344ef1b8"
+        },
+        {
+          "bytes": 156929,
+          "kind": "parquet_payload",
+          "mtime_ns": 1784253792098143272,
+          "path": "data/chunk-000/file-005.parquet",
+          "sha256": "96cf6ec90156111d4a198ec0d8e7907446301a2d2dcf4a2f4e62ec8fd661f4f0"
+        },
+        {
+          "bytes": 117126,
+          "kind": "parquet_payload",
+          "mtime_ns": 1784253830483144815,
+          "path": "data/chunk-000/file-006.parquet",
+          "sha256": "d03496a4b1a98c8e4cb1d0b970b7dfb7fc8db12c5ece21216b13b3504ae397c8"
+        },
+        {
+          "bytes": 92029,
+          "kind": "parquet_payload",
+          "mtime_ns": 1784253863204146130,
+          "path": "data/chunk-000/file-007.parquet",
+          "sha256": "a75d9f1c387fa8c7be48e5e265c4b9d1eb0ae5bdb29a3b2d9dd6744b20247c47"
+        },
+        {
+          "bytes": 114134,
+          "kind": "parquet_payload",
+          "mtime_ns": 1784253901315147662,
+          "path": "data/chunk-000/file-008.parquet",
+          "sha256": "1090e64c801c2a435cb3dcad7fe9f2ae3e4cabe9b101b23c014070497b7dcac3"
+        },
+        {
+          "bytes": 131821,
+          "kind": "parquet_payload",
+          "mtime_ns": 1784253941700149286,
+          "path": "data/chunk-000/file-009.parquet",
+          "sha256": "0d71a122f760084446d6a980b8e499379d15540597f4aaa2fac72e532b839eb1"
+        },
+        {
+          "bytes": 9442,
+          "kind": "metadata",
+          "mtime_ns": 1784253482470130826,
+          "path": "meta/calibration/realsense_344522070241.json",
+          "sha256": "405f18c206f387c00e39bea2066ae0a63d9a229b63da5798d7e54157467534bd"
+        },
+        {
+          "bytes": 9382,
+          "kind": "metadata",
+          "mtime_ns": 1784253482470130826,
+          "path": "meta/calibration/realsense_346522076690.json",
+          "sha256": "6df7dd502200eb262d1c0816328e50eb47760090dd35294e69737a0335d5a5a6"
+        },
+        {
+          "bytes": 9418,
+          "kind": "metadata",
+          "mtime_ns": 1784253482469130826,
+          "path": "meta/calibration/realsense_347622074728.json",
+          "sha256": "306f06a6f41e5be45db075fcec8dd9b361db2b1d5a918997a5456cbc28a577ed"
+        },
+        {
+          "bytes": 102847,
+          "kind": "metadata",
+          "mtime_ns": 1784253570682134372,
+          "path": "meta/episodes/chunk-000/file-000.parquet",
+          "sha256": "c11cdb0996e9c0dc9eaa4a5affacfbaee6b1c7eb30e25c1debccb95f95b74030"
+        },
+        {
+          "bytes": 102887,
+          "kind": "metadata",
+          "mtime_ns": 1784253613077136076,
+          "path": "meta/episodes/chunk-000/file-001.parquet",
+          "sha256": "d1b3ff02822fabf402840b655cdc3189979078e203f06030166b7f23160365d4"
+        },
+        {
+          "bytes": 102834,
+          "kind": "metadata",
+          "mtime_ns": 1784253660714137991,
+          "path": "meta/episodes/chunk-000/file-002.parquet",
+          "sha256": "9464a3457ebcda123a44a5eb383fd7b1046a4a8b1359ebf12edab2112fb00f93"
+        },
+        {
+          "bytes": 102873,
+          "kind": "metadata",
+          "mtime_ns": 1784253699705139558,
+          "path": "meta/episodes/chunk-000/file-003.parquet",
+          "sha256": "5b1868fa6d77c4bde6f345dbd24a9f3ab8e11733547a89b1eac146c6da52330b"
+        },
+        {
+          "bytes": 102884,
+          "kind": "metadata",
+          "mtime_ns": 1784253744763141369,
+          "path": "meta/episodes/chunk-000/file-004.parquet",
+          "sha256": "a652edf0817fe4ffb4b7192b730fb4112e5ffe75034739a814230c20227219d7"
+        },
+        {
+          "bytes": 103181,
+          "kind": "metadata",
+          "mtime_ns": 1784253792098143272,
+          "path": "meta/episodes/chunk-000/file-005.parquet",
+          "sha256": "432b2a2d299873ccb38d17aa7df890bd5d1fdf5cbc236fbc60e26f9e382d9a13"
+        },
+        {
+          "bytes": 102796,
+          "kind": "metadata",
+          "mtime_ns": 1784253830484144815,
+          "path": "meta/episodes/chunk-000/file-006.parquet",
+          "sha256": "675bba0727bdf6bae683387fd492a2b8115ebc80fb1c7c12b80c18f008dc4166"
+        },
+        {
+          "bytes": 102805,
+          "kind": "metadata",
+          "mtime_ns": 1784253863206146130,
+          "path": "meta/episodes/chunk-000/file-007.parquet",
+          "sha256": "a145bdca2c1207826941173fd51b2603fe7a2bb6b7f87210573cb6930f75de30"
+        },
+        {
+          "bytes": 102789,
+          "kind": "metadata",
+          "mtime_ns": 1784253901316147662,
+          "path": "meta/episodes/chunk-000/file-008.parquet",
+          "sha256": "65e303efce0220c864e56b0c713ef9ff417ea3b437ea231705e69818fe810eb9"
+        },
+        {
+          "bytes": 102815,
+          "kind": "metadata",
+          "mtime_ns": 1784253941700149286,
+          "path": "meta/episodes/chunk-000/file-009.parquet",
+          "sha256": "e6b917f72c8b1ce72184afacfc1bdcfe06b3cf02a50046414796e9b470e869d6"
+        },
+        {
+          "bytes": 8916,
+          "kind": "metadata",
+          "mtime_ns": 1784253941698149286,
+          "path": "meta/info.json",
+          "sha256": "d2bc12f727018f036baa2d9a4786b62fa3a0eb91c40f0cb3dc5b3ba283efebd9"
+        },
+        {
+          "bytes": 34983,
+          "kind": "metadata",
+          "mtime_ns": 1784253482470130826,
+          "path": "meta/realsense_calibration.json",
+          "sha256": "e711812a60f1fd25b70540991e7ff733408150a997c77ef7e5929f415f61132d"
+        },
+        {
+          "bytes": 7865,
+          "kind": "metadata",
+          "mtime_ns": 1784253953571149763,
+          "path": "meta/rgbd_sidecar.json",
+          "sha256": "820f5a03f30cef1ceda33dc80e7e407ed3f4ef4190205a54abebeb453528ad0b"
+        },
+        {
+          "bytes": 31929,
+          "kind": "metadata",
+          "mtime_ns": 1784253941700149286,
+          "path": "meta/stats.json",
+          "sha256": "5814d184a8194eaa6cd3b254f3c40a51562bc2c000735126210bc061c7f23e07"
+        },
+        {
+          "bytes": 2361,
+          "kind": "metadata",
+          "mtime_ns": 1784253554225133710,
+          "path": "meta/tasks.parquet",
+          "sha256": "0f4b7e0ddb96068bbb7e70fb964b9b888a124eaf07a2252bbc5dacf0d5b4f453"
+        },
+        {
+          "bytes": 95140398,
+          "kind": "video_payload",
+          "mtime_ns": 1784253941680149285,
+          "path": "videos/observation.images.head_rgb/chunk-000/file-000.mp4",
+          "sha256": "3983929bb9e11d44e85ff9d7e6d861ce047bbefcdc0d26b3c755057b06d67c98"
+        },
+        {
+          "bytes": 37340475,
+          "kind": "video_payload",
+          "mtime_ns": 1784253934783149008,
+          "path": "videos/observation.images.left_wrist_rgb/chunk-000/file-000.mp4",
+          "sha256": "86689f9fba5b0a82e04fc7c359a32aabd0cb1b85e6794d2344c91a0ee120a051"
+        },
+        {
+          "bytes": 30630206,
+          "kind": "video_payload",
+          "mtime_ns": 1784253938211149145,
+          "path": "videos/observation.images.right_wrist_rgb/chunk-000/file-000.mp4",
+          "sha256": "cb1bcd637510af04e2bec92c8a3184fe606436e06dd4806708cbcdae1b2aa616"
+        }
+      ],
+      "hash_policy": "SHA-256 metadata, Parquet, Zarr schema, and video files; Zarr frame chunks are inventory-only",
+      "manifest_hash": "3d24abfece4008cc706bdd80bba0be8140d39cb3d5662fda8402534e320adbed",
+      "raw_sidecar_chunk_summary": {
+        "bytes": 10626095958,
+        "directories": {
+          "sidecars/realsense.zarr": {
+            "bytes": 177,
+            "files": 2
+          },
+          "sidecars/realsense.zarr/data": {
+            "bytes": 24,
+            "files": 1
+          },
+          "sidecars/realsense.zarr/data/head": {
+            "bytes": 24,
+            "files": 1
+          },
+          "sidecars/realsense.zarr/data/head/depth": {
+            "bytes": 1054562302,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/data/head/left_ir": {
+            "bytes": 1366732281,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/data/head/rgbd_reused": {
+            "bytes": 15300,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/data/head/rgbd_timestamp": {
+            "bytes": 50186,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/data/head/right_ir": {
+            "bytes": 1359503837,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/data/left_wrist": {
+            "bytes": 24,
+            "files": 1
+          },
+          "sidecars/realsense.zarr/data/left_wrist/depth": {
+            "bytes": 540607073,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/data/left_wrist/left_ir": {
+            "bytes": 1415769010,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/data/left_wrist/rgbd_reused": {
+            "bytes": 15300,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/data/left_wrist/rgbd_timestamp": {
+            "bytes": 50186,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/data/left_wrist/right_ir": {
+            "bytes": 1423485090,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/data/right_wrist": {
+            "bytes": 24,
+            "files": 1
+          },
+          "sidecars/realsense.zarr/data/right_wrist/depth": {
+            "bytes": 602182780,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/data/right_wrist/left_ir": {
+            "bytes": 1427605874,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/data/right_wrist/rgbd_reused": {
+            "bytes": 15300,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/data/right_wrist/rgbd_timestamp": {
+            "bytes": 50186,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/data/right_wrist/right_ir": {
+            "bytes": 1435199471,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/meta": {
+            "bytes": 24,
+            "files": 1
+          },
+          "sidecars/realsense.zarr/meta/episode_ends": {
+            "bytes": 563,
+            "files": 2
+          },
+          "sidecars/realsense.zarr/meta/episode_index": {
+            "bytes": 50184,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/meta/frame_index": {
+            "bytes": 50184,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/meta/global_frame_index": {
+            "bytes": 50184,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/meta/index": {
+            "bytes": 50184,
+            "files": 624
+          },
+          "sidecars/realsense.zarr/meta/robot_timestamp": {
+            "bytes": 50186,
+            "files": 624
+          }
+        },
+        "files": 12489
+      },
+      "total_bytes": 10791673363,
+      "total_files": 31,
+      "total_files_including_raw_chunks": 12520
+    }
+  ],
+  "manifest_hash": "20c4ffb4e9dcba5f53a8cceb5786997a5654489a082117512f1473f4ccb5ccc8",
+  "manifest_type": "paper_a_source_file_inventory",
+  "raw_root": "/home/deepcybo/.cache/huggingface/lerobot/flexiv_dual_arm_3d",
+  "read_only": true,
+  "schema_version": 1
+}

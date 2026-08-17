@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "snapshot_date": "2026-08-17",
+  "repository": {
+    "root": "/home/deepcybo/flexiv_ws/Le-nero",
+    "base_branch": "develop/3d_policy/dual_arm",
+    "base_commit": "fc1ae884c6d5a2f610f40a5f61e71917ae02b0d0",
+    "research_branch": "research/paper-a-teb-data",
+    "remote": "origin https://github.com/Key-Zzs/Le-nero.git"
+  },
+  "submodule": {
+    "path": "dual_arm_data_collection/lerobot_dual_arm_teleop",
+    "url": "https://github.com/Shenzhaolong1330/dual_arm_teleop.git",
+    "configured_branch": "develop/3d_policy/dual_flexiv_GN01",
+    "pinned_commit": "d363eb6b9de2c1a20bc9947330265fb6b9eb03c8",
+    "verification": "clean checkout and reproducible superproject pin; no submodule changes"
+  },
+  "environment": {
+    "python": "/home/deepcybo/miniconda3/envs/dual_arm_teleop/bin/python",
+    "python_version": "3.10.20",
+    "os": "Linux 6.8.0-124-generic-x86_64, glibc 2.35",
+    "packages": {
+      "lerobot": "0.3.4",
+      "numpy": "2.2.6",
+      "pyarrow": "24.0.0",
+      "zarr": "2.18.3",
+      "av": "15.1.0",
+      "opencv": "4.12.0",
+      "torch": "2.7.1+cu128"
+    }
+  },
+  "raw_data": {
+    "root": "/home/deepcybo/.cache/huggingface/lerobot/flexiv_dual_arm_3d",
+    "immutability": "read-only; no source writes, renames, deletes, or patches",
+    "dataset_detection": "LeRobot meta/info.json plus data directory"
+  },
+  "information_boundary": {
+    "raw_source": "immutable",
+    "stage2_pose_and_effect": "derived offline annotations, excluded from policy observation",
+    "phase_semantics": "not a Paper A core input; no Stage 1 phase labels generated",
+    "tracker": "not run in Stage 1; human review required"
+  }
+}
