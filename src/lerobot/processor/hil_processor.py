@@ -22,7 +22,7 @@ from typing import Any, Protocol, TypeVar, runtime_checkable
 
 import numpy as np
 import torch
-import torchvision.transforms.functional as F  # noqa: N812
+import torchvision.transforms.v2.functional as F  # noqa: N812
 
 from lerobot.configs.types import PipelineFeatureType, PolicyFeature
 from lerobot.teleoperators.teleoperator import Teleoperator
@@ -204,7 +204,7 @@ class ImageCropResizeProcessorStep(ObservationProcessorStep):
 
         # Process all image keys in the observation
         for key in observation:
-            if "image" not in key:
+            if "image" not in key or key.endswith("_is_pad"):
                 continue
 
             image = observation[key]

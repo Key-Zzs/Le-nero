@@ -952,7 +952,12 @@ class LeRobotDataset(torch.utils.data.Dataset):
 
             video_path = self.root / self.meta.get_video_file_path(ep_idx, vid_key)
             frames = decode_video_frames(video_path, shifted_query_ts, self.tolerance_s, self.video_backend)
-            item[vid_key] = frames.squeeze(0)
+            # An explicit temporal query retains its time axis even for [0],
+            # matching _query_hf_dataset for state. Single-frame Diffusion
+            # training needs [T=1,C,H,W], while non-temporal ACT/inference
+            # observations continue to receive [C,H,W].
+            temporal_query = self.delta_indices is not None and vid_key in self.delta_indices
+            item[vid_key] = frames if temporal_query else frames.squeeze(0)
 
         return item
 
