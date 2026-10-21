@@ -14,6 +14,7 @@
 
 from .act.configuration_act import ACTConfig as ACTConfig
 from .diffusion.configuration_diffusion import DiffusionConfig as DiffusionConfig
+from .grasp_act.configuration_grasp_act import GraspACTConfig as GraspACTConfig
 from .pi0.configuration_pi0 import PI0Config as PI0Config
 from .pi05.configuration_pi05 import PI05Config as PI05Config
 from .smolvla.configuration_smolvla import SmolVLAConfig as SmolVLAConfig
@@ -24,6 +25,7 @@ from .vqbet.configuration_vqbet import VQBeTConfig as VQBeTConfig
 __all__ = [
     "ACTConfig",
     "DiffusionConfig",
+    "GraspACTConfig",
     "PI0Config",
     "PI05Config",
     "SmolVLAConfig",

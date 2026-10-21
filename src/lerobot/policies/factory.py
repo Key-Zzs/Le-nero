@@ -30,6 +30,7 @@ from lerobot.envs.configs import EnvConfig
 from lerobot.envs.utils import env_to_policy_features
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
+from lerobot.policies.grasp_act.configuration_grasp_act import GraspACTConfig
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
 from lerobot.policies.pi05.configuration_pi05 import PI05Config
 from lerobot.policies.pretrained import PreTrainedPolicy
@@ -77,6 +78,10 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from lerobot.policies.act.modeling_act import ACTPolicy
 
         return ACTPolicy
+    elif name == "grasp_act":
+        from lerobot.policies.grasp_act.modeling_grasp_act import GraspACTPolicy
+
+        return GraspACTPolicy
     elif name == "vqbet":
         from lerobot.policies.vqbet.modeling_vqbet import VQBeTPolicy
 
@@ -130,6 +135,8 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return DiffusionConfig(**kwargs)
     elif policy_type == "act":
         return ACTConfig(**kwargs)
+    elif policy_type == "grasp_act":
+        return GraspACTConfig(**kwargs)
     elif policy_type == "vqbet":
         return VQBeTConfig(**kwargs)
     elif policy_type == "pi0":
@@ -196,9 +203,13 @@ def make_pre_post_processors(
 
     Raises:
         NotImplementedError: If a processor factory is not implemented for the given
-            policy configuration type.
+        policy configuration type.
     """
     if pretrained_path:
+        if isinstance(policy_cfg, GraspACTConfig):
+            # Registers Grasp-ACT-specific processor steps before loading saved pipelines.
+            import lerobot.policies.grasp_act.processor_grasp_act  # noqa: F401
+
         return (
             PolicyProcessorPipeline.from_pretrained(
                 pretrained_model_name_or_path=pretrained_path,
@@ -241,6 +252,14 @@ def make_pre_post_processors(
         from lerobot.policies.act.processor_act import make_act_pre_post_processors
 
         processors = make_act_pre_post_processors(
+            config=policy_cfg,
+            dataset_stats=kwargs.get("dataset_stats"),
+        )
+
+    elif isinstance(policy_cfg, GraspACTConfig):
+        from lerobot.policies.grasp_act.processor_grasp_act import make_grasp_act_pre_post_processors
+
+        processors = make_grasp_act_pre_post_processors(
             config=policy_cfg,
             dataset_stats=kwargs.get("dataset_stats"),
         )

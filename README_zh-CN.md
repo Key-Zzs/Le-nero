@@ -211,9 +211,12 @@ pip install -e .
 | `tools-check-dataset` | 检查本地 LeRobot 数据集信息 | 命令参数 |
 | `tools-check-dagger-dataset` | 检查导出的 DAgger 数据集 | 命令参数 |
 | `tools-check-rs` | 查看 RealSense 设备序列号 | 无 |
+| `tools-preprocess-dataset` | 基于 `observation.state` 变化率压缩静止片段、可选平滑动作，并通过 LeRobot API 重写数据集 | `scripts/config/preprocess_dataset_cfg.yaml` |
+| `tools-split-label-dataset` | 将长 episode 切分为带语义标签的子 episode，可选按 state 变化率过滤静止段并写新数据集 | `scripts/config/split_label_dataset_cfg.yaml` |
+| `tools-merge-datasets` | 将多个 schema 一致的本地 LeRobot 数据集合并为一个实体数据集 | `scripts/config/merge_dataset_cfg.yaml` |
 | `robot-help` | 打印命令摘要 | 无 |
 
-所有核心命令都支持显式传入配置文件，推荐调试时总是写明路径：
+所有核心命令和配置驱动的数据集工具都支持显式传入配置文件，推荐调试时总是写明路径：
 
 ```bash
 robot-record --config scripts/config/record_cfg.yaml
@@ -223,7 +226,34 @@ robot-reset --config scripts/config/record_cfg.yaml
 robot-train --config scripts/config/train_cfg.yaml
 robot-dagger --config scripts/config/dagger_rounds_cfg.yaml
 robot-dagger-export --config scripts/config/dagger_rounds_cfg.yaml
+tools-preprocess-dataset --config scripts/config/preprocess_dataset_cfg.yaml --dry-run
+tools-split-label-dataset --config scripts/config/split_label_dataset_cfg.yaml --dry-run
+tools-merge-datasets --config scripts/config/merge_dataset_cfg.yaml --dry-run
 ```
+
+## 数据集工具
+
+| 命令 | 常用用法 | 说明 |
+| --- | --- | --- |
+| `tools-check-dataset` | `tools-check-dataset --config scripts/config/record_cfg.yaml` | 删除本地记录中实际文件夹已不存在的数据集条目；可用 `--lerobot-home` 覆盖数据集缓存根目录。 |
+| `tools-check-dagger-dataset` | `tools-check-dagger-dataset --config scripts/config/dagger_rounds_cfg.yaml --train-config scripts/config/train_cfg.yaml` | 审计 DAgger 导出数据、schema、动作值、source 标签和训练兼容性。 |
+| `tools-preprocess-dataset` | `tools-preprocess-dataset --config scripts/config/preprocess_dataset_cfg.yaml --dry-run` | 压缩静止片段、保留夹爪事件上下文、可选平滑笛卡尔动作；支持 `--overwrite` 和 `--max-episodes`。静止判据默认使用 `observation.state` 的变化率，而不是 `action == 0`；夹爪状态变化也算 motion；连续静止至少 10 帧才会被压缩。 |
+| `tools-split-label-dataset` | `tools-split-label-dataset --config scripts/config/split_label_dataset_cfg.yaml --dry-run` | 支持 `--label-only`、`--write-dataset`、`--overwrite`、`--max-episodes` 和 `--resume-cache`；静止段过滤默认使用 `observation.state` 的变化率，夹爪状态变化也会保留；连续静止至少 10 帧才会被裁剪。 |
+| `tools-merge-datasets` | `tools-merge-datasets --config scripts/config/merge_dataset_cfg.yaml --dry-run` | 合并 `source.parent_dir` 下 `source.datasets` 列出的数据集；支持 `--overwrite` 和 `--max-episodes`。 |
+| `tools-check-rs` | `tools-check-rs` | 需要 `pyrealsense2`；打印已连接 RealSense 的名称和序列号。 |
+
+以下维护脚本未注册为 console command，但可在本包根目录直接运行：
+
+| 脚本 | 常用用法 | 作用 |
+| --- | --- | --- |
+| `scripts/tools/rename_lerobot_task.py` | `python scripts/tools/rename_lerobot_task.py --dataset-root <dataset> --new-task "<task>" --dry-run` | 重命名单个数据集里的 task prompt，并同步 `meta/tasks.parquet`、episode metadata 和可选 `dataset_info.txt`。 |
+| `scripts/tools/merge_lerobot_tasks.py` | `python scripts/tools/merge_lerobot_tasks.py --dataset-root <dataset> --source-task "<old>" --target-task "<keep>" --dry-run` | 将单个数据集里的一个 task 标签合并到另一个 task 标签。 |
+| `scripts/tools/patch_lerobot_dataset_metadata.py` | `python scripts/tools/patch_lerobot_dataset_metadata.py --dataset-root <dataset> --check-only` | 检查或修补数据集 description、repo id 等显式 metadata 字段。 |
+| `scripts/tools/run_dagger_export_train_experiment.py` | `python scripts/tools/run_dagger_export_train_experiment.py --raw-dataset <raw> --base-dataset <seed_or_agg> --initial-checkpoint <ckpt> --output-root <out> --dry-run` | 针对不同 DAgger export mode 跑导出/训练实验。 |
+| `scripts/core/check_dagger_sampling.py` | `python scripts/core/check_dagger_sampling.py --dataset <aggregated_dataset>` | 检查 source-aware DAgger sampler 权重。 |
+| `scripts/tools/check_robotiq_ports.sh` | `bash scripts/tools/check_robotiq_ports.sh --verbose` | 在 `/dev/serial/by-id` 下查找疑似 Robotiq 夹爪串口；也支持 `--json`。 |
+| `scripts/tools/map_gripper.sh` | `sudo bash scripts/tools/map_gripper.sh dobot_left_gripper` | 给单个已连接 USB 夹爪创建 udev 软链接。 |
+| `rm_tmp.sh` | `bash rm_tmp.sh` | 清理本包内 Python cache 和构建产物。 |
 
 采集前通常需要修改 `scripts/config/record_cfg.yaml`：
 
